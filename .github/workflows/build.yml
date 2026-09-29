@@ -49,15 +49,16 @@ jobs:
           python -c '
           import glob, re
 
-          # 1. Dependency Conflict ကို ဖြေရှင်းခြင်း (serious_python 0.7.0 နှင့် flutter_native_splash 2.3.7 သို့ ချိန်ညှိခြင်း)
+          # 1. Dependency Indentation မပျက်စေဘဲ serious_python နှင့် flutter_native_splash ကိုသာ အစားထိုးခြင်း
           for pub in glob.glob("custom-template/**/pubspec.yaml", recursive=True):
               with open(pub, "r", encoding="utf-8") as f:
                   txt = f.read()
-              txt = re.sub(r"serious_python:\s*.*", "serious_python: 0.7.0", txt)
-              txt = re.sub(r"flutter_native_splash:\s*.*", "flutter_native_splash: 2.3.7", txt)
+              # ရှေ့တွင် space ပါသော dependency စာကြောင်းများကိုသာ အတိအကျ ပြင်ဆင်ခြင်း
+              txt = re.sub(r"(\s+serious_python:\s*).*", r"\g<1>0.7.0", txt)
+              txt = re.sub(r"(\s+flutter_native_splash:\s*).*", r"\g<1>2.3.7", txt)
               with open(pub, "w", encoding="utf-8") as f:
                   f.write(txt)
-              print("Fixed dependencies in:", pub)
+              print("Successfully fixed dependencies with safe indentation in:", pub)
 
           # 2. dataplus:// scheme ကို AndroidManifest.xml ထဲသို့ ထည့်သွင်းခြင်း
           for manifest in glob.glob("custom-template/**/AndroidManifest.xml", recursive=True):
@@ -73,7 +74,7 @@ jobs:
                       </intent-filter>
               """
               if "dataplus" not in data and "</activity>" in data:
-                  data = data.replace("</activity>", f"{scheme_filter}\n        </activity>")
+                  data = data.replace("</activity>", f"{scheme_filter}\n        </activity>", 1)
                   with open(manifest, "w", encoding="utf-8") as f:
                       f.write(data)
                   print("Injected Browsable dataplus scheme into:", manifest)
@@ -82,7 +83,7 @@ jobs:
           cd custom-template
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git commit -am "Fix pubspec version conflict and inject dataplus scheme" || true
+          git commit -am "Safely fix dependencies with indentation and inject dataplus scheme" || true
           cd ..
 
       - name: Build Raw APK
