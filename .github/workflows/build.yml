@@ -39,6 +39,35 @@ jobs:
             echo "Icon ready in assets/icon.png ✅"
           fi
 
+      - name: Inject Custom URL Scheme (dataplus://)
+        run: |
+          mkdir -p ~/.cookiecutters
+          git clone --depth 1 -b 0.25.0 https://github.com/flet-dev/flet-build-template ~/.cookiecutters/flet-build-template
+          python -c '
+          import glob, os
+          for mf in glob.glob(os.path.expanduser("~/.cookiecutters/**/AndroidManifest.xml"), recursive=True):
+              with open(mf, "r", encoding="utf-8") as f:
+                  data = f.read()
+              intent_filter = """
+                      <!-- DATA PLUS Custom URL Scheme -->
+                      <intent-filter>
+                          <action android:name="android.intent.action.VIEW" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.BROWSABLE" />
+                          <data android:scheme="dataplus" />
+                      </intent-filter>
+              """
+              if "dataplus" not in data:
+                  data = data.replace("</activity>", f"{intent_filter}\n        </activity>")
+                  with open(mf, "w", encoding="utf-8") as f:
+                      f.write(data)
+                  print("Successfully injected dataplus scheme into:", mf)
+          '
+          cd ~/.cookiecutters/flet-build-template
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git commit -am "Add dataplus scheme" || true
+
       - name: Build Raw APK
         run: echo "y" | flet build apk
 
