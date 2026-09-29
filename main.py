@@ -6,6 +6,18 @@ import urllib.parse
 from pathlib import Path
 import time
 import traceback
+import shutil
+
+def get_storage_info():
+    """ဖုန်း၏ လက်ကျန် Storage (GB) ကို တွက်ချက်ခြင်း"""
+    try:
+        path = "/storage/emulated/0/Download" if os.path.exists("/storage/emulated/0/Download") else str(Path.home())
+        total, used, free = shutil.disk_usage(path)
+        free_gb = free / (1024 ** 3)
+        total_gb = total / (1024 ** 3)
+        return f"💾 Storage လက်ကျန်: {free_gb:.1f} GB Free / {total_gb:.1f} GB"
+    except Exception:
+        return "💾 Storage: စစ်ဆေးမရပါ"
 
 def main(page: ft.Page):
     page.title = "DATA PLUS Downloader"
@@ -15,6 +27,18 @@ def main(page: ft.Page):
     page.padding = 10
     page.window_width = 450
     page.window_height = 800
+
+    # Storage Info Display Component
+    storage_display = ft.Container(
+        content=ft.Row([
+            ft.Icon(ft.icons.STORAGE_ROUNDED, size=15, color="#00ff88"),
+            ft.Text(get_storage_info(), size=11, color="#00ff88", weight=ft.FontWeight.W_500),
+        ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
+        bgcolor="#121e16",
+        border=ft.border.all(1, "#1b4d2e"),
+        border_radius=10,
+        padding=ft.padding.symmetric(horizontal=12, vertical=6),
+    )
 
     status_text = ft.Text("📥 ဒေါင်းလုဒ်ဆွဲရန် Link များကို ထည့်ပါ", color="#4a9eff", size=13, weight=ft.FontWeight.BOLD)
     
@@ -35,6 +59,13 @@ def main(page: ft.Page):
     downloading_list = ft.ListView(expand=1, spacing=8, padding=5, auto_scroll=True)
     finished_list = ft.ListView(expand=1, spacing=8, padding=5, auto_scroll=True)
 
+    def refresh_storage_display():
+        try:
+            storage_display.content.controls[1].value = get_storage_info()
+            storage_display.update()
+        except Exception:
+            pass
+
     def copy_task_error(e):
         err = e.control.data
         if err:
@@ -52,7 +83,7 @@ def main(page: ft.Page):
             else:
                 status_text.value = "⚠️ Clipboard တွင် ဘာမှ မရှိပါ။"
             status_text.update()
-        except Exception as ex:
+        except Exception:
             status_text.value = "❌ Paste မရပါ။ (Ctrl+V ကို သုံးပါ)"
             status_text.update()
 
@@ -110,7 +141,6 @@ def main(page: ft.Page):
                     status_color = "#f1c40f"
                 
                 action_buttons = []
-                # Error ဖြစ်ပါက Copy Error ခလုတ် ထည့်သွင်းပြသခြင်း
                 if info['status'] == 'Error' and 'error_msg' in info:
                     action_buttons.append(
                         ft.ElevatedButton(
@@ -300,6 +330,7 @@ def main(page: ft.Page):
             finished_tasks[fname] = {'path': str(file_path)}
             del download_tasks[fname]
             update_ui()
+            refresh_storage_display()
 
     def queue_download_worker():
         while True:
@@ -359,6 +390,7 @@ def main(page: ft.Page):
                         finished_tasks[fname] = {'path': str(file_path)}
                         del download_tasks[fname]
                         update_ui()
+                        refresh_storage_display()
 
             except Exception as ex:
                 if fname in download_tasks:
@@ -368,6 +400,7 @@ def main(page: ft.Page):
                     update_ui()
 
         status_text.value = "🎉 ဒေါင်းလုဒ် အားလုံး ပြီးစီးသွားပါပြီ!"
+        refresh_storage_display()
         page.update()
 
     paste_btn = ft.ElevatedButton(text="📋 Paste", on_click=paste_from_clipboard, bgcolor="#333333", color="#ffffff")
@@ -410,7 +443,7 @@ def main(page: ft.Page):
     tab_btn_1.on_click = switch_to_downloading
     tab_btn_2.on_click = switch_to_finished
 
-    # SafeArea ဖြင့် Status Bar / Notch မကွယ်အောင် ထိန်းထားပေးခြင်း
+    # SafeArea ဖြင့် Status Bar / Notch မကွယ်စေရန် ထိန်းထားခြင်း
     page.add(
         ft.SafeArea(
             content=ft.Container(
@@ -418,6 +451,7 @@ def main(page: ft.Page):
                     ft.Row([
                         ft.Text("🎬 DATA PLUS Downloader", size=16, weight=ft.FontWeight.BOLD, color="#4a9eff")
                     ], alignment=ft.MainAxisAlignment.CENTER),
+                    ft.Row([storage_display], alignment=ft.MainAxisAlignment.CENTER),
                     ft.Divider(color="#333333"),
                     status_text,
                     links_input,
@@ -425,14 +459,24 @@ def main(page: ft.Page):
                     ft.Divider(color="#333333"),
                     ft.Row([tab_btn_1, tab_btn_2], alignment=ft.MainAxisAlignment.SPACE_AROUND),
                     content_area
-                ], spacing=10, expand=True),
+                ], spacing=8, expand=True),
                 bgcolor="#1a1a1a",
-                padding=15,
+                padding=12,
                 border_radius=20,
                 expand=True
             ),
             expand=True
         )
     )
+
+    # App စဖွင့်ချိန်တွင် Clipboard ထဲ Download Link ပါလာပါက Auto ထည့်ပေးခြင်း
+    try:
+        clip = page.get_clipboard()
+        if clip and "http" in clip:
+            links_input.value = clip
+            status_text.value = "📋 Link များကို Clipboard မှ အလိုအလျောက် ထည့်ပေးထားပါသည်။"
+            page.update()
+    except Exception:
+        pass
 
 ft.app(target=main)
