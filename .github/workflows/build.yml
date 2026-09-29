@@ -31,8 +31,16 @@ jobs:
       - name: Install Flet 0.25.0
         run: pip install flet==0.25.0 flet-cli==0.25.0 requests
 
-      - name: Build Raw APK with Icon
-        run: echo "y" | flet build apk --icon icon.png
+      - name: Prepare App Icon
+        run: |
+          mkdir -p assets
+          if [ -f "icon.png" ]; then
+            cp icon.png assets/icon.png
+            echo "Icon ready in assets/icon.png ✅"
+          fi
+
+      - name: Build Raw APK
+        run: echo "y" | flet build apk
 
       - name: Sign APK with Release Key (V1, V2, V3)
         run: |
