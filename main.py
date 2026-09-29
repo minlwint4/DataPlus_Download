@@ -8,63 +8,94 @@ import time
 import traceback
 import shutil
 
-def get_storage_info():
-    """ဖုန်း၏ လက်ကျန် Storage (GB) ကို တွက်ချက်ခြင်း"""
+def get_storage_stats():
+    """ဖုန်း၏ Total နှင့် Free Storage (Bytes) ကို တွက်ထုတ်ခြင်း"""
     try:
         path = "/storage/emulated/0/Download" if os.path.exists("/storage/emulated/0/Download") else str(Path.home())
         total, used, free = shutil.disk_usage(path)
-        free_gb = free / (1024 ** 3)
-        total_gb = total / (1024 ** 3)
-        return f"💾 Storage လက်ကျန်: {free_gb:.1f} GB Free / {total_gb:.1f} GB"
+        return total, free
     except Exception:
-        return "💾 Storage: စစ်ဆေးမရပါ"
+        return 0, 0
+
+def format_size(bytes_val):
+    """Bytes မှ MB/GB သို့ အလွယ်ဖတ်နိုင်အောင် ပြောင်းခြင်း"""
+    gb = bytes_val / (1024 ** 3)
+    if gb >= 1.0:
+        return f"{gb:.2f} GB"
+    mb = bytes_val / (1024 ** 2)
+    return f"{mb:.1f} MB"
 
 def main(page: ft.Page):
     page.title = "DATA PLUS Downloader"
-    page.vertical_alignment = ft.MainAxisAlignment.CENTER
-    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.bgcolor = "#0a0a0a"
-    page.padding = 10
+    page.padding = 8
     page.window_width = 450
     page.window_height = 800
 
-    # Storage Info Display Component
+    # ၁။ လက်ကျန် Storage ပြသသည့် Badge
+    storage_text = ft.Text("", size=11, color="#00ff88", weight=ft.FontWeight.W_500)
+    
+    def refresh_storage_display():
+        total, free = get_storage_stats()
+        if total > 0:
+            storage_text.value = f"💾 Storage လက်ကျန်: {format_size(free)} Free / {format_size(total)}"
+        else:
+            storage_text.value = "💾 Storage: စစ်ဆေးမရပါ"
+        try:
+            storage_display.update()
+        except Exception:
+            pass
+
     storage_display = ft.Container(
         content=ft.Row([
             ft.Icon(ft.icons.STORAGE_ROUNDED, size=15, color="#00ff88"),
-            ft.Text(get_storage_info(), size=11, color="#00ff88", weight=ft.FontWeight.W_500),
+            storage_text,
         ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
         bgcolor="#121e16",
         border=ft.border.all(1, "#1b4d2e"),
         border_radius=10,
-        padding=ft.padding.symmetric(horizontal=12, vertical=6),
+        padding=ft.padding.symmetric(horizontal=12, vertical=5),
+    )
+    refresh_storage_display()
+
+    # ၂။ Storage မလုံလောက်ပါက ပေါ်လာမည့် သတိပေး Alert Box (အနီရောင် ကွက်တိ)
+    warning_title = ft.Text("⚠️ ဖုန်းလက်ကျန် Storage မလုံလောက်ပါ!", color="#ff4444", weight=ft.FontWeight.BOLD, size=12)
+    warning_desc = ft.Text("", color="#ffcccc", size=11)
+    
+    storage_alert_box = ft.Container(
+        visible=False,
+        content=ft.Row([
+            ft.Icon(ft.icons.WARNING_AMBER_ROUNDED, color="#ff4444", size=28),
+            ft.Column([warning_title, warning_desc], spacing=2, expand=True)
+        ], alignment=ft.MainAxisAlignment.START, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        bgcolor="#351010",
+        border=ft.border.all(1.5, "#ff3333"),
+        border_radius=10,
+        padding=10,
+        margin=ft.margin.symmetric(vertical=4)
     )
 
-    status_text = ft.Text("📥 ဒေါင်းလုဒ်ဆွဲရန် Link များကို ထည့်ပါ", color="#4a9eff", size=13, weight=ft.FontWeight.BOLD)
+    status_text = ft.Text("📥 ဒေါင်းလုဒ်ဆွဲရန် Link များကို ထည့်ပါ", color="#4a9eff", size=12, weight=ft.FontWeight.BOLD)
     
+    # Screen နေရာ မစားစေရန် Input Box ကို အချိုးကျ ချုံ့ထားခြင်း
     links_input = ft.TextField(
         label="Download Links (တစ်ကြောင်းလျှင် တစ်ခု)",
         multiline=True,
-        min_lines=3,
-        max_lines=5,
+        min_lines=2,
+        max_lines=3,
         border_color="#4a9eff",
         color="#ffffff",
-        label_style=ft.TextStyle(color="#aaaaaa"),
-        bgcolor="#1e1e1e"
+        label_style=ft.TextStyle(color="#aaaaaa", size=11),
+        bgcolor="#1e1e1e",
+        text_size=12
     )
 
     download_tasks = {}  
     finished_tasks = {}  
     
-    downloading_list = ft.ListView(expand=1, spacing=8, padding=5, auto_scroll=True)
-    finished_list = ft.ListView(expand=1, spacing=8, padding=5, auto_scroll=True)
-
-    def refresh_storage_display():
-        try:
-            storage_display.content.controls[1].value = get_storage_info()
-            storage_display.update()
-        except Exception:
-            pass
+    # auto_scroll=False ဖြင့် အပေါ်ကပ်ပျောက်သွားသည့် ပြဿနာကို ဖြေရှင်းထားခြင်း
+    downloading_list = ft.ListView(expand=True, spacing=8, padding=ft.padding.symmetric(vertical=6, horizontal=2))
+    finished_list = ft.ListView(expand=True, spacing=8, padding=ft.padding.symmetric(vertical=6, horizontal=2))
 
     def copy_task_error(e):
         err = e.control.data
@@ -84,12 +115,14 @@ def main(page: ft.Page):
                 status_text.value = "⚠️ Clipboard တွင် ဘာမှ မရှိပါ။"
             status_text.update()
         except Exception:
-            status_text.value = "❌ Paste မရပါ။ (Ctrl+V ကို သုံးပါ)"
+            status_text.value = "❌ Paste မရပါ။"
             status_text.update()
 
     def clear_input(e):
         links_input.value = ""
         links_input.update()
+        storage_alert_box.visible = False
+        storage_alert_box.update()
         status_text.value = "🗑️ Link အားလုံး ရှင်းလင်းပြီးပါပြီ။"
         status_text.update()
 
@@ -120,8 +153,8 @@ def main(page: ft.Page):
             del finished_tasks[fname]
             update_ui()
 
-    tab_btn_1 = ft.ElevatedButton(text="📥 Downloading (0)", bgcolor="#222222", color="#4a9eff")
-    tab_btn_2 = ft.ElevatedButton(text="✅ Finished (0)", bgcolor="#222222", color="#2ecc71")
+    tab_btn_1 = ft.ElevatedButton(text="📥 Downloading (0)", bgcolor="#333333", color="#4a9eff", style=ft.ButtonStyle(padding=8))
+    tab_btn_2 = ft.ElevatedButton(text="✅ Finished (0)", bgcolor="#222222", color="#2ecc71", style=ft.ButtonStyle(padding=8))
 
     def update_ui():
         try:
@@ -144,27 +177,21 @@ def main(page: ft.Page):
                 if info['status'] == 'Error' and 'error_msg' in info:
                     action_buttons.append(
                         ft.ElevatedButton(
-                            text="📋 Copy Error",
-                            data=info['error_msg'],
-                            on_click=copy_task_error,
-                            bgcolor="#882222",
-                            color="#ffffff",
-                            style=ft.ButtonStyle(padding=2)
+                            text="📋 Error", data=info['error_msg'], on_click=copy_task_error,
+                            bgcolor="#882222", color="#ffffff", style=ft.ButtonStyle(padding=3)
                         )
                     )
 
                 action_buttons.extend([
                     ft.ElevatedButton(
                         text="▶/⏸" if info['status'] != 'Paused' else "▶",
-                        data=filename, on_click=toggle_pause_resume, bgcolor="#333333", color="#ffffff", style=ft.ButtonStyle(padding=2)
+                        data=filename, on_click=toggle_pause_resume, bgcolor="#333333", color="#ffffff", style=ft.ButtonStyle(padding=3)
                     ),
                     ft.ElevatedButton(
-                        text="⏹ Stop",
-                        data=filename, on_click=stop_download_task, bgcolor="#552222", color="#ffffff", style=ft.ButtonStyle(padding=2)
+                        text="⏹", data=filename, on_click=stop_download_task, bgcolor="#552222", color="#ffffff", style=ft.ButtonStyle(padding=3)
                     ),
                     ft.ElevatedButton(
-                        text="🗑️",
-                        data=filename, on_click=delete_downloading_task, bgcolor="#772222", color="#ffffff", style=ft.ButtonStyle(padding=2)
+                        text="🗑️", data=filename, on_click=delete_downloading_task, bgcolor="#772222", color="#ffffff", style=ft.ButtonStyle(padding=3)
                     )
                 ])
 
@@ -181,9 +208,9 @@ def main(page: ft.Page):
                                 ft.Text(info['status'], size=9, color=status_color),
                                 ft.Row(action_buttons, spacing=4)
                             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-                        ], spacing=4),
+                        ], spacing=3),
                         bgcolor="#161616",
-                        padding=10,
+                        padding=8,
                         border_radius=8
                     )
                 )
@@ -196,14 +223,13 @@ def main(page: ft.Page):
                             ft.Row([
                                 ft.Text(filename, size=11, color="#2ecc71", weight=ft.FontWeight.BOLD, expand=True),
                                 ft.ElevatedButton(
-                                    text="🗑️ ဖျက်မည်",
-                                    data=filename, on_click=delete_finished_task, bgcolor="#772222", color="#ffffff", style=ft.ButtonStyle(padding=2)
+                                    text="🗑️ ဖျက်မည်", data=filename, on_click=delete_finished_task, bgcolor="#772222", color="#ffffff", style=ft.ButtonStyle(padding=3)
                                 )
                             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                             ft.Text(f"📂 သိမ်းဆည်းရာ: {info['path']}", size=9, color="#888888")
-                        ], spacing=4),
+                        ], spacing=3),
                         bgcolor="#161616",
-                        padding=10,
+                        padding=8,
                         border_radius=8
                     )
                 )
@@ -233,27 +259,66 @@ def main(page: ft.Page):
         raw_text = links_input.value.strip()
         if not raw_text:
             status_text.value = "❌ ကျေးဇူးပြု၍ Link ထည့်ပါ။"
+            status_text.color = "#ff4444"
             page.update()
             return
 
         urls = [line.strip() for line in raw_text.split("\n") if line.strip()]
         if not urls:
             status_text.value = "❌ မှန်ကန်သော Link မရှိပါ။"
+            status_text.color = "#ff4444"
             page.update()
             return
+
+        # Storage စစ်ဆေးနေစဉ် Loading ပြပေးခြင်း
+        status_text.value = "🔍 Storage နှင့် ဖိုင်အရွယ်အစားများကို စစ်ဆေးနေပါသည်..."
+        status_text.color = "#f1c40f"
+        page.update()
+
+        # UI မခဲသွားစေရန် Background Thread ဖြင့် စစ်ဆေးခြင်း
+        threading.Thread(target=check_storage_and_enqueue, args=(urls,), daemon=True).start()
+
+    def check_storage_and_enqueue(urls):
+        total_required_bytes = 0
+        file_meta = []
 
         for url in urls:
             fname = url.split('/')[-1].split('?')[0]
             fname = urllib.parse.unquote(fname) or "video.mp4"
+            size = 0
+            try:
+                res = requests.head(url, allow_redirects=True, timeout=5)
+                size = int(res.headers.get('content-length', 0))
+            except Exception:
+                pass
+            total_required_bytes += size
+            file_meta.append((fname, url, size))
+
+        _, free_bytes = get_storage_stats()
+
+        # လုံခြုံရေး Buffer အတွက် 200 MB ချန်ထားပြီး စစ်ဆေးခြင်း
+        safe_margin = 200 * 1024 * 1024 
+        if free_bytes > 0 and (total_required_bytes + safe_margin) > free_bytes:
+            # 🚨 Storage မလုံလောက်ပါက Alert Box ပြပြီး ရပ်တန့်ခြင်း
+            warning_desc.value = f"လိုအပ်ချက်: {format_size(total_required_bytes)} | လက်ကျန်: {format_size(free_bytes)}"
+            storage_alert_box.visible = True
+            status_text.value = "❌ လက်ကျန် Storage မလုံလောက်ပါသဖြင့် ဒေါင်းလုဒ် ရပ်တန့်ထားပါသည်။"
+            status_text.color = "#ff4444"
+            page.update()
+            return
+
+        # Storage လုံလောက်ပါက Alert Box ဖျောက်ပြီး ဒေါင်းလုဒ် စတင်ခြင်း
+        storage_alert_box.visible = False
+        status_text.color = "#4a9eff"
+        status_text.value = "🚀 4-Threads ဖြင့် အမြန်ဆွဲနေပါပြီ..."
+
+        for fname, url, size in file_meta:
             download_tasks[fname] = {
                 'url': url, 'status': 'Waiting', 'percent': 0, 'speed': '0 KB/s', 
                 'control': 'running', 'last_ui_update': 0
             }
 
         update_ui()
-        status_text.value = f"🚀 4-Threads ဖြင့် အမြန်ဆွဲနေပါပြီ..."
-        page.update()
-
         threading.Thread(target=queue_download_worker, daemon=True).start()
 
     def multi_thread_download(fname, url, file_path, total_size):
@@ -407,15 +472,15 @@ def main(page: ft.Page):
     clear_btn = ft.ElevatedButton(text="🗑️ Clear", on_click=clear_input, bgcolor="#552222", color="#ffffff")
     download_btn = ft.ElevatedButton(text="📥 ဒေါင်းလုဒ် စတင်ရန်", on_click=start_download, bgcolor="#0275d8", color="#ffffff")
     
-    clear_downloading_btn = ft.ElevatedButton(text="🧹 Downloading အားလုံးဖျက်မည်", on_click=clear_downloading_list, bgcolor="#442255", color="#ffffff")
-    clear_finished_btn = ft.ElevatedButton(text="🧹 Finished အားလုံးဖျက်မည်", on_click=clear_finished_list, bgcolor="#442255", color="#ffffff")
+    clear_downloading_btn = ft.ElevatedButton(text="🧹 အားလုံးဖျက်မည်", on_click=clear_downloading_list, bgcolor="#442255", color="#ffffff", style=ft.ButtonStyle(padding=5))
+    clear_finished_btn = ft.ElevatedButton(text="🧹 အားလုံးဖျက်မည်", on_click=clear_finished_list, bgcolor="#442255", color="#ffffff", style=ft.ButtonStyle(padding=5))
 
     content_area = ft.Container(
         content=ft.Column([
             ft.Row([clear_downloading_btn], alignment=ft.MainAxisAlignment.END),
             downloading_list
-        ], spacing=5, expand=True), 
-        bgcolor="#101010", padding=5, expand=True
+        ], spacing=4, expand=True), 
+        bgcolor="#101010", padding=6, expand=True, border_radius=10
     )
 
     def switch_to_downloading(e):
@@ -426,7 +491,7 @@ def main(page: ft.Page):
         content_area.content = ft.Column([
             ft.Row([clear_downloading_btn], alignment=ft.MainAxisAlignment.END),
             downloading_list
-        ], spacing=5, expand=True)
+        ], spacing=4, expand=True)
         content_area.update()
 
     def switch_to_finished(e):
@@ -437,39 +502,39 @@ def main(page: ft.Page):
         content_area.content = ft.Column([
             ft.Row([clear_finished_btn], alignment=ft.MainAxisAlignment.END),
             finished_list
-        ], spacing=5, expand=True)
+        ], spacing=4, expand=True)
         content_area.update()
 
     tab_btn_1.on_click = switch_to_downloading
     tab_btn_2.on_click = switch_to_finished
 
-    # SafeArea ဖြင့် Status Bar / Notch မကွယ်စေရန် ထိန်းထားခြင်း
+    # Main UI Layout
     page.add(
         ft.SafeArea(
             content=ft.Container(
                 content=ft.Column([
                     ft.Row([
-                        ft.Text("🎬 DATA PLUS Downloader", size=16, weight=ft.FontWeight.BOLD, color="#4a9eff")
+                        ft.Text("🎬 DATA PLUS Downloader", size=15, weight=ft.FontWeight.BOLD, color="#4a9eff")
                     ], alignment=ft.MainAxisAlignment.CENTER),
                     ft.Row([storage_display], alignment=ft.MainAxisAlignment.CENTER),
-                    ft.Divider(color="#333333"),
+                    storage_alert_box,
                     status_text,
                     links_input,
                     ft.Row([paste_btn, clear_btn, download_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    ft.Divider(color="#333333"),
+                    ft.Divider(color="#222222", height=1),
                     ft.Row([tab_btn_1, tab_btn_2], alignment=ft.MainAxisAlignment.SPACE_AROUND),
                     content_area
-                ], spacing=8, expand=True),
-                bgcolor="#1a1a1a",
-                padding=12,
-                border_radius=20,
+                ], spacing=6, expand=True),
+                bgcolor="#161616",
+                padding=10,
+                border_radius=16,
                 expand=True
             ),
             expand=True
         )
     )
 
-    # App စဖွင့်ချိန်တွင် Clipboard ထဲ Download Link ပါလာပါက Auto ထည့်ပေးခြင်း
+    # App ဖွင့်ချိန်တွင် Clipboard ထဲ Link ပါလာပါက Auto ထည့်ပေးခြင်း
     try:
         clip = page.get_clipboard()
         if clip and "http" in clip:
