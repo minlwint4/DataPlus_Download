@@ -5,13 +5,14 @@ import threading
 import urllib.parse
 from pathlib import Path
 import time
+import traceback
 
 def main(page: ft.Page):
     page.title = "DATA PLUS Downloader"
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.bgcolor = "#0a0a0a"
-    page.padding = 20
+    page.padding = 10
     page.window_width = 450
     page.window_height = 800
 
@@ -33,6 +34,13 @@ def main(page: ft.Page):
     
     downloading_list = ft.ListView(expand=1, spacing=8, padding=5, auto_scroll=True)
     finished_list = ft.ListView(expand=1, spacing=8, padding=5, auto_scroll=True)
+
+    def copy_task_error(e):
+        err = e.control.data
+        if err:
+            page.set_clipboard(err)
+            status_text.value = "📋 Error စာသားကို Copy ကူးယူပြီးပါပြီ။"
+            status_text.update()
 
     def paste_from_clipboard(e):
         try:
@@ -100,7 +108,36 @@ def main(page: ft.Page):
                 status_color = "#00ff88" if info['status'] == 'Downloading' else ("#e67e22" if info['status'] == 'Paused' else "#ff4444")
                 if info['status'] == 'Merging...':
                     status_color = "#f1c40f"
-                    
+                
+                action_buttons = []
+                # Error ဖြစ်ပါက Copy Error ခလုတ် ထည့်သွင်းပြသခြင်း
+                if info['status'] == 'Error' and 'error_msg' in info:
+                    action_buttons.append(
+                        ft.ElevatedButton(
+                            text="📋 Copy Error",
+                            data=info['error_msg'],
+                            on_click=copy_task_error,
+                            bgcolor="#882222",
+                            color="#ffffff",
+                            style=ft.ButtonStyle(padding=2)
+                        )
+                    )
+
+                action_buttons.extend([
+                    ft.ElevatedButton(
+                        text="▶/⏸" if info['status'] != 'Paused' else "▶",
+                        data=filename, on_click=toggle_pause_resume, bgcolor="#333333", color="#ffffff", style=ft.ButtonStyle(padding=2)
+                    ),
+                    ft.ElevatedButton(
+                        text="⏹ Stop",
+                        data=filename, on_click=stop_download_task, bgcolor="#552222", color="#ffffff", style=ft.ButtonStyle(padding=2)
+                    ),
+                    ft.ElevatedButton(
+                        text="🗑️",
+                        data=filename, on_click=delete_downloading_task, bgcolor="#772222", color="#ffffff", style=ft.ButtonStyle(padding=2)
+                    )
+                ])
+
                 downloading_list.controls.append(
                     ft.Container(
                         content=ft.Column([
@@ -112,20 +149,7 @@ def main(page: ft.Page):
                             ft.ProgressBar(value=info['percent']/100, color="#00ff88", bgcolor="#252525", height=6),
                             ft.Row([
                                 ft.Text(info['status'], size=9, color=status_color),
-                                ft.Row([
-                                    ft.ElevatedButton(
-                                        text="▶/⏸" if info['status'] != 'Paused' else "▶",
-                                        data=filename, on_click=toggle_pause_resume, bgcolor="#333333", color="#ffffff", style=ft.ButtonStyle(padding=2)
-                                    ),
-                                    ft.ElevatedButton(
-                                        text="⏹ Stop",
-                                        data=filename, on_click=stop_download_task, bgcolor="#552222", color="#ffffff", style=ft.ButtonStyle(padding=2)
-                                    ),
-                                    ft.ElevatedButton(
-                                        text="🗑️",  # တစ်ဖိုင်ချင်းဖျက်ရန် ခလုတ်
-                                        data=filename, on_click=delete_downloading_task, bgcolor="#772222", color="#ffffff", style=ft.ButtonStyle(padding=2)
-                                    )
-                                ], spacing=4)
+                                ft.Row(action_buttons, spacing=4)
                             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
                         ], spacing=4),
                         bgcolor="#161616",
@@ -202,7 +226,6 @@ def main(page: ft.Page):
 
         threading.Thread(target=queue_download_worker, daemon=True).start()
 
-    # 4-Threads Download လုပ်မည့် Function
     def multi_thread_download(fname, url, file_path, total_size):
         num_threads = 4  
         part_size = total_size // num_threads
@@ -253,7 +276,6 @@ def main(page: ft.Page):
         for t in threads:
             t.join()
 
-        # Stop နှိပ်ထားလျှင် ဖိုင်စများကို ပြန်ဖျက်မည်
         if fname not in download_tasks or download_tasks[fname]['control'] == 'stopped':
             for i in range(num_threads):
                 pf = f"{file_path}.part{i}"
@@ -261,7 +283,6 @@ def main(page: ft.Page):
                     os.remove(pf)
             return
 
-        # ပြီးဆုံးလျှင် ဖိုင်စများကို ပေါင်းမည်
         if fname in download_tasks:
             download_tasks[fname]['status'] = 'Merging...'
             download_tasks[fname]['speed'] = 'Processing'
@@ -301,14 +322,12 @@ def main(page: ft.Page):
                 download_tasks[fname]['status'] = 'Downloading'
                 update_ui()
 
-                # ဖိုင်ဆိုဒ်ကို စစ်ဆေးခြင်း
                 head_res = requests.head(url, allow_redirects=True, timeout=10)
                 total_size = int(head_res.headers.get('content-length', 0))
                 
                 if total_size > 0:
                     multi_thread_download(fname, url, str(file_path), total_size)
                 else:
-                    # Thread ဖြင့် ဆွဲမရပါက ရိုးရိုး Single Thread ဖြင့် ဆွဲမည်
                     response = requests.get(url, stream=True, timeout=15)
                     downloaded = 0
                     start_time = time.time()
@@ -344,7 +363,8 @@ def main(page: ft.Page):
             except Exception as ex:
                 if fname in download_tasks:
                     download_tasks[fname]['status'] = 'Error'
-                    download_tasks[fname]['speed'] = str(ex)[:20]
+                    download_tasks[fname]['speed'] = 'Failed'
+                    download_tasks[fname]['error_msg'] = f"{str(ex)}\n\n{traceback.format_exc()}"
                     update_ui()
 
         status_text.value = "🎉 ဒေါင်းလုဒ် အားလုံး ပြီးစီးသွားပါပြီ!"
@@ -354,7 +374,6 @@ def main(page: ft.Page):
     clear_btn = ft.ElevatedButton(text="🗑️ Clear", on_click=clear_input, bgcolor="#552222", color="#ffffff")
     download_btn = ft.ElevatedButton(text="📥 ဒေါင်းလုဒ် စတင်ရန်", on_click=start_download, bgcolor="#0275d8", color="#ffffff")
     
-    # Remove All ခလုတ်များ
     clear_downloading_btn = ft.ElevatedButton(text="🧹 Downloading အားလုံးဖျက်မည်", on_click=clear_downloading_list, bgcolor="#442255", color="#ffffff")
     clear_finished_btn = ft.ElevatedButton(text="🧹 Finished အားလုံးဖျက်မည်", on_click=clear_finished_list, bgcolor="#442255", color="#ffffff")
 
@@ -391,23 +410,27 @@ def main(page: ft.Page):
     tab_btn_1.on_click = switch_to_downloading
     tab_btn_2.on_click = switch_to_finished
 
+    # SafeArea ဖြင့် Status Bar / Notch မကွယ်အောင် ထိန်းထားပေးခြင်း
     page.add(
-        ft.Container(
-            content=ft.Column([
-                ft.Row([
-                    ft.Text("🎬 DATA PLUS Downloader", size=16, weight=ft.FontWeight.BOLD, color="#4a9eff")
-                ], alignment=ft.MainAxisAlignment.CENTER),
-                ft.Divider(color="#333333"),
-                status_text,
-                links_input,
-                ft.Row([paste_btn, clear_btn, download_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Divider(color="#333333"),
-                ft.Row([tab_btn_1, tab_btn_2], alignment=ft.MainAxisAlignment.SPACE_AROUND),
-                content_area
-            ], spacing=10, expand=True),
-            bgcolor="#1a1a1a",
-            padding=15,
-            border_radius=20,
+        ft.SafeArea(
+            content=ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Text("🎬 DATA PLUS Downloader", size=16, weight=ft.FontWeight.BOLD, color="#4a9eff")
+                    ], alignment=ft.MainAxisAlignment.CENTER),
+                    ft.Divider(color="#333333"),
+                    status_text,
+                    links_input,
+                    ft.Row([paste_btn, clear_btn, download_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    ft.Divider(color="#333333"),
+                    ft.Row([tab_btn_1, tab_btn_2], alignment=ft.MainAxisAlignment.SPACE_AROUND),
+                    content_area
+                ], spacing=10, expand=True),
+                bgcolor="#1a1a1a",
+                padding=15,
+                border_radius=20,
+                expand=True
+            ),
             expand=True
         )
     )
