@@ -39,7 +39,7 @@ jobs:
             echo "Icon ready in assets/icon.png ✅"
           fi
 
-      - name: Setup Custom Template (Pin serious_python 0.7.0 & Inject dataplus scheme)
+      - name: Setup Custom Template (Fix Dependencies & Inject dataplus scheme)
         run: |
           git clone https://github.com/flet-dev/flet-build-template.git custom-template
           cd custom-template
@@ -49,14 +49,15 @@ jobs:
           python -c '
           import glob, re
 
-          # 1. serious_python ကို 0.7.0 အတိအကျ lock ချခြင်း (0.7.1 ကြောင့် --requirements error မတက်စေရန်)
+          # 1. Dependency Conflict ကို ဖြေရှင်းခြင်း (serious_python 0.7.0 နှင့် flutter_native_splash 2.3.7 သို့ ချိန်ညှိခြင်း)
           for pub in glob.glob("custom-template/**/pubspec.yaml", recursive=True):
               with open(pub, "r", encoding="utf-8") as f:
                   txt = f.read()
               txt = re.sub(r"serious_python:\s*.*", "serious_python: 0.7.0", txt)
+              txt = re.sub(r"flutter_native_splash:\s*.*", "flutter_native_splash: 2.3.7", txt)
               with open(pub, "w", encoding="utf-8") as f:
                   f.write(txt)
-              print("Fixed serious_python to 0.7.0 in:", pub)
+              print("Fixed dependencies in:", pub)
 
           # 2. dataplus:// scheme ကို AndroidManifest.xml ထဲသို့ ထည့်သွင်းခြင်း
           for manifest in glob.glob("custom-template/**/AndroidManifest.xml", recursive=True):
@@ -81,7 +82,7 @@ jobs:
           cd custom-template
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git commit -am "Lock serious_python to 0.7.0 and inject dataplus scheme" || true
+          git commit -am "Fix pubspec version conflict and inject dataplus scheme" || true
           cd ..
 
       - name: Build Raw APK
