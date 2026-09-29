@@ -23,8 +23,8 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Install Flet
-        run: pip install flet
+      - name: Install Flet 0.25.0
+        run: pip install flet==0.25.0 flet-cli==0.25.0 requests
 
       - name: Build APK
         run: echo "y" | flet build apk
