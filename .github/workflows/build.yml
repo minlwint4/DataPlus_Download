@@ -39,7 +39,7 @@ jobs:
             echo "Icon ready in assets/icon.png ✅"
           fi
 
-      - name: Setup Custom Template (Fix serious_python & Add dataplus scheme)
+      - name: Setup Custom Template (Pin serious_python 0.7.0 & Inject dataplus scheme)
         run: |
           git clone https://github.com/flet-dev/flet-build-template.git custom-template
           cd custom-template
@@ -49,16 +49,16 @@ jobs:
           python -c '
           import glob, re
 
-          # 1. serious_python ကို 0.6.3 ဖြင့် pin ခြင်း (--requirements error ပြေလည်စေရန်)
+          # 1. serious_python ကို 0.7.0 အတိအကျ lock ချခြင်း (0.7.1 ကြောင့် --requirements error မတက်စေရန်)
           for pub in glob.glob("custom-template/**/pubspec.yaml", recursive=True):
               with open(pub, "r", encoding="utf-8") as f:
                   txt = f.read()
-              txt = re.sub(r"serious_python:\s*.*", "serious_python: 0.6.3", txt)
+              txt = re.sub(r"serious_python:\s*.*", "serious_python: 0.7.0", txt)
               with open(pub, "w", encoding="utf-8") as f:
                   f.write(txt)
-              print("Fixed serious_python to 0.6.3 in:", pub)
+              print("Fixed serious_python to 0.7.0 in:", pub)
 
-          # 2. dataplus:// scheme ကို AndroidManifest ထဲ ထည့်သွင်းခြင်း
+          # 2. dataplus:// scheme ကို AndroidManifest.xml ထဲသို့ ထည့်သွင်းခြင်း
           for manifest in glob.glob("custom-template/**/AndroidManifest.xml", recursive=True):
               with open(manifest, "r", encoding="utf-8") as f:
                   data = f.read()
@@ -81,7 +81,7 @@ jobs:
           cd custom-template
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git commit -am "Fix serious_python and inject dataplus scheme" || true
+          git commit -am "Lock serious_python to 0.7.0 and inject dataplus scheme" || true
           cd ..
 
       - name: Build Raw APK
@@ -92,27 +92,31 @@ jobs:
           RAW_APK=$(find build/apk -name "*.apk" | head -n 1)
           echo "Found APK at: $RAW_APK"
 
-          # 1. Keystore ထုတ်လုပ်ခြင်း
+          # 1. Release Keystore အသစ် ဖန်တီးခြင်း
           keytool -genkeypair -v -keystore release.jks -alias dataplus -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass "dataplus123" -keypass "dataplus123" \
             -dname "CN=DATA PLUS Downloader, OU=DataPlus, O=DataPlus, L=Yangon, ST=Yangon, C=MM"
 
-          # 2. Build tools ရှာဖွေခြင်း
+          # 2. Android Build Tools ရှာဖွေခြင်း
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+          echo "Using Android Build Tools: $BUILD_TOOLS_DIR"
 
-          # 3. Signature အဟောင်း ရှင်းလင်းခြင်း
+          # 3. မူရင်း Signature အဟောင်းများ ရှင်းထုတ်ခြင်း
           zip -d "$RAW_APK" "META-INF/*.SF" "META-INF/*.RSA" "META-INF/*.DSA" "META-INF/MANIFEST.MF" || true
 
           # 4. Zipalign ပြုလုပ်ခြင်း
           $BUILD_TOOLS_DIR/zipalign -f -p 4 "$RAW_APK" build/apk/DataPlus_aligned.apk
 
-          # 5. V1, V2, V3 Schemes ဖြင့် Sign ထိုးခြင်း
+          # 5. V1, V2, V3 Schemes များဖြင့် Sign ထိုးခြင်း
           $BUILD_TOOLS_DIR/apksigner sign --ks release.jks --ks-pass pass:dataplus123 --key-pass pass:dataplus123 \
             --ks-key-alias dataplus \
             --v1-signing-enabled true \
             --v2-signing-enabled true \
             --v3-signing-enabled true \
             --out build/apk/DataPlus_Downloader.apk build/apk/DataPlus_aligned.apk
+
+          # 6. Signature အောင်မြင်မှု စစ်ဆေးခြင်း
+          $BUILD_TOOLS_DIR/apksigner verify --verbose build/apk/DataPlus_Downloader.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
