@@ -39,7 +39,7 @@ jobs:
             echo "Icon ready in assets/icon.png ✅"
           fi
 
-      - name: Setup Custom Template (Fix Dependencies & Inject dataplus scheme)
+      - name: Setup Stable Template
         run: |
           git clone https://github.com/flet-dev/flet-build-template.git custom-template
           cd custom-template
@@ -47,44 +47,17 @@ jobs:
           cd ..
 
           python -c '
-          import glob, re
-
-          # 1. Dependency Indentation မပျက်စေဘဲ serious_python နှင့် flutter_native_splash ကိုသာ အစားထိုးခြင်း
+          import glob
           for pub in glob.glob("custom-template/**/pubspec.yaml", recursive=True):
               with open(pub, "r", encoding="utf-8") as f:
-                  txt = f.read()
-              # ရှေ့တွင် space ပါသော dependency စာကြောင်းများကိုသာ အတိအကျ ပြင်ဆင်ခြင်း
-              txt = re.sub(r"(\s+serious_python:\s*).*", r"\g<1>0.7.0", txt)
-              txt = re.sub(r"(\s+flutter_native_splash:\s*).*", r"\g<1>2.3.7", txt)
+                  content = f.read()
+              # တိကျသော စာကြောင်းများကိုသာ အစားထိုးခြင်း (YAML format မပျက်စေရန်)
+              content = content.replace("serious_python: ^0.7.0", "serious_python: 0.7.0")
+              content = content.replace("flutter_native_splash: ^2.4.1", "flutter_native_splash: 2.3.7")
               with open(pub, "w", encoding="utf-8") as f:
-                  f.write(txt)
-              print("Successfully fixed dependencies with safe indentation in:", pub)
-
-          # 2. dataplus:// scheme ကို AndroidManifest.xml ထဲသို့ ထည့်သွင်းခြင်း
-          for manifest in glob.glob("custom-template/**/AndroidManifest.xml", recursive=True):
-              with open(manifest, "r", encoding="utf-8") as f:
-                  data = f.read()
-              scheme_filter = """
-                      <!-- DATA PLUS Browsable Scheme -->
-                      <intent-filter>
-                          <action android:name="android.intent.action.VIEW" />
-                          <category android:name="android.intent.category.DEFAULT" />
-                          <category android:name="android.intent.category.BROWSABLE" />
-                          <data android:scheme="dataplus" />
-                      </intent-filter>
-              """
-              if "dataplus" not in data and "</activity>" in data:
-                  data = data.replace("</activity>", f"{scheme_filter}\n        </activity>", 1)
-                  with open(manifest, "w", encoding="utf-8") as f:
-                      f.write(data)
-                  print("Injected Browsable dataplus scheme into:", manifest)
+                  f.write(content)
+              print("Successfully tuned dependencies in:", pub)
           '
-
-          cd custom-template
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git commit -am "Safely fix dependencies with indentation and inject dataplus scheme" || true
-          cd ..
 
       - name: Build Raw APK
         run: echo "y" | flet build apk --template ./custom-template
