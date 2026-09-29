@@ -26,7 +26,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          flutter-version: '3.24.3'
 
       - name: Install Flet 0.25.0
         run: pip install flet==0.25.0 flet-cli==0.25.0 requests
