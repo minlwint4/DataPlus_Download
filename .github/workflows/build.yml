@@ -31,8 +31,8 @@ jobs:
       - name: Install Flet 0.25.0
         run: pip install flet==0.25.0 flet-cli==0.25.0 requests
 
-      - name: Build Raw APK
-        run: echo "y" | flet build apk
+      - name: Build Raw APK with Icon
+        run: echo "y" | flet build apk --icon icon.png
 
       - name: Sign APK with Release Key (V1, V2, V3)
         run: |
@@ -48,13 +48,13 @@ jobs:
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
           echo "Using Android Build Tools: $BUILD_TOOLS_DIR"
 
-          # 3. မူရင်း Debug Signature အဟောင်းများကို ရှင်းထုတ်ခြင်း
+          # 3. မူရင်း Signature အဟောင်းများကို ရှင်းထုတ်ခြင်း
           zip -d "$RAW_APK" "META-INF/*.SF" "META-INF/*.RSA" "META-INF/*.DSA" "META-INF/MANIFEST.MF" || true
 
-          # 4. Zipalign ပြုလုပ်ခြင်း (Android စနစ်အားလုံး ဖတ်ရှုနိုင်စေရန်)
+          # 4. Zipalign ပြုလုပ်ခြင်း
           $BUILD_TOOLS_DIR/zipalign -f -p 4 "$RAW_APK" build/apk/DataPlus_aligned.apk
 
-          # 5. V1, V2, V3 Schemes အားလုံးဖြင့် တရားဝင် Sign ထိုးခြင်း
+          # 5. V1, V2, V3 Schemes များဖြင့် Sign ထိုးခြင်း
           $BUILD_TOOLS_DIR/apksigner sign --ks release.jks --ks-pass pass:dataplus123 --key-pass pass:dataplus123 \
             --ks-key-alias dataplus \
             --v1-signing-enabled true \
