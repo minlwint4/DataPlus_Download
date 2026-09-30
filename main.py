@@ -1,547 +1,834 @@
 import flet as ft
 import os
-import requests
-import threading
-import urllib.parse
-from pathlib import Path
-import time
-import traceback
 import shutil
+import time
+import threading
+import requests
+from requests.adapters import HTTPAdapter
+import traceback
+from datetime import datetime
+from urllib.parse import unquote
 
-def get_storage_stats():
-    """ဖုန်း၏ Total နှင့် Free Storage (Bytes) ကို တွက်ထုတ်ခြင်း"""
+# 📁 ဖိုင်သိမ်းဆည်းမည့် လမ်းကြောင်း
+DOWNLOAD_DIR = "/storage/emulated/0/Download/DataPlus"
+
+# ⚡ High-Speed Connection Pool (Local Network အတွက် အမြန်ဆုံး စနစ်)
+http_session = requests.Session()
+adapter = HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=2)
+http_session.mount("http://", adapter)
+http_session.mount("https://", adapter)
+
+# 💾 ဖုန်း STORAGE လက်ကျန် တွက်ချက်သည့် Helper
+def get_phone_storage_info():
+    paths_to_check = ["/storage/emulated/0", DOWNLOAD_DIR, os.path.expanduser("~"), "."]
+    for path in paths_to_check:
+        try:
+            total, used, free = shutil.disk_usage(path)
+            free_gb = free / (1024 ** 3)
+            total_gb = total / (1024 ** 3)
+            free_pct = (free / total * 100) if total > 0 else 0
+            used_ratio = used / total if total > 0 else 0.0
+            return free_gb, total_gb, free_pct, used_ratio
+        except Exception:
+            continue
+    return 0.0, 0.0, 0.0, 0.0
+
+# 📋 Clipboard Helper Functions
+def get_clipboard_text(page: ft.Page) -> str:
     try:
-        path = "/storage/emulated/0/Download" if os.path.exists("/storage/emulated/0/Download") else str(Path.home())
-        total, used, free = shutil.disk_usage(path)
-        return total, free
+        if hasattr(page, "get_clipboard"):
+            return page.get_clipboard() or ""
+        elif hasattr(page, "clipboard") and hasattr(page.clipboard, "get"):
+            return page.clipboard.get() or ""
     except Exception:
-        return 0, 0
+        pass
+    return ""
 
-def format_size(bytes_val):
-    """Bytes မှ MB/GB သို့ အလွယ်ဖတ်နိုင်အောင် ပြောင်းခြင်း"""
-    gb = bytes_val / (1024 ** 3)
-    if gb >= 1.0:
-        return f"{gb:.2f} GB"
-    mb = bytes_val / (1024 ** 2)
-    return f"{mb:.1f} MB"
-
-def main(page: ft.Page):
-    page.title = "DATA PLUS Downloader"
-    page.bgcolor = "#0a0a0a"
-    page.padding = 8
-    page.window_width = 450
-    page.window_height = 800
-
-    # ၁။ လက်ကျန် Storage ပြသသည့် Badge
-    storage_text = ft.Text("", size=11, color="#00ff88", weight=ft.FontWeight.W_500)
-    
-    def refresh_storage_display():
-        total, free = get_storage_stats()
-        if total > 0:
-            storage_text.value = f"💾 Storage လက်ကျန်: {format_size(free)} Free / {format_size(total)}"
-        else:
-            storage_text.value = "💾 Storage: စစ်ဆေးမရပါ"
-        try:
-            storage_display.update()
-        except Exception:
-            pass
-
-    storage_display = ft.Container(
-        content=ft.Row([
-            ft.Icon(ft.icons.STORAGE_ROUNDED, size=15, color="#00ff88"),
-            storage_text,
-        ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
-        bgcolor="#121e16",
-        border=ft.border.all(1, "#1b4d2e"),
-        border_radius=10,
-        padding=ft.padding.symmetric(horizontal=12, vertical=5),
-    )
-    refresh_storage_display()
-
-    # ၂။ Storage မလုံလောက်ပါက ပေါ်လာမည့် သတိပေး Alert Box (အနီရောင် ကွက်တိ)
-    warning_title = ft.Text("⚠️ ဖုန်းလက်ကျန် Storage မလုံလောက်ပါ!", color="#ff4444", weight=ft.FontWeight.BOLD, size=12)
-    warning_desc = ft.Text("", color="#ffcccc", size=11)
-    
-    storage_alert_box = ft.Container(
-        visible=False,
-        content=ft.Row([
-            ft.Icon(ft.icons.WARNING_AMBER_ROUNDED, color="#ff4444", size=28),
-            ft.Column([warning_title, warning_desc], spacing=2, expand=True)
-        ], alignment=ft.MainAxisAlignment.START, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        bgcolor="#351010",
-        border=ft.border.all(1.5, "#ff3333"),
-        border_radius=10,
-        padding=10,
-        margin=ft.margin.symmetric(vertical=4)
-    )
-
-    status_text = ft.Text("📥 ဒေါင်းလုဒ်ဆွဲရန် Link များကို ထည့်ပါ", color="#4a9eff", size=12, weight=ft.FontWeight.BOLD)
-    
-    # Screen နေရာ မစားစေရန် Input Box ကို အချိုးကျ ချုံ့ထားခြင်း
-    links_input = ft.TextField(
-        label="Download Links (တစ်ကြောင်းလျှင် တစ်ခု)",
-        multiline=True,
-        min_lines=2,
-        max_lines=3,
-        border_color="#4a9eff",
-        color="#ffffff",
-        label_style=ft.TextStyle(color="#aaaaaa", size=11),
-        bgcolor="#1e1e1e",
-        text_size=12
-    )
-
-    download_tasks = {}  
-    finished_tasks = {}  
-    
-    # auto_scroll=False ဖြင့် အပေါ်ကပ်ပျောက်သွားသည့် ပြဿနာကို ဖြေရှင်းထားခြင်း
-    downloading_list = ft.ListView(expand=True, spacing=8, padding=ft.padding.symmetric(vertical=6, horizontal=2))
-    finished_list = ft.ListView(expand=True, spacing=8, padding=ft.padding.symmetric(vertical=6, horizontal=2))
-
-    def copy_task_error(e):
-        err = e.control.data
-        if err:
-            page.set_clipboard(err)
-            status_text.value = "📋 Error စာသားကို Copy ကူးယူပြီးပါပြီ။"
-            status_text.update()
-
-    def paste_from_clipboard(e):
-        try:
-            clipboard_data = page.get_clipboard()
-            if clipboard_data:
-                links_input.value = clipboard_data
-                links_input.update()
-                status_text.value = "📋 Clipboard မှ Link များကို ထည့်ပြီးပါပြီ။"
-            else:
-                status_text.value = "⚠️ Clipboard တွင် ဘာမှ မရှိပါ။"
-            status_text.update()
-        except Exception:
-            status_text.value = "❌ Paste မရပါ။"
-            status_text.update()
-
-    def clear_input(e):
-        links_input.value = ""
-        links_input.update()
-        storage_alert_box.visible = False
-        storage_alert_box.update()
-        status_text.value = "🗑️ Link အားလုံး ရှင်းလင်းပြီးပါပြီ။"
-        status_text.update()
-
-    def clear_finished_list(e):
-        finished_tasks.clear()
-        update_ui()
-        status_text.value = "🧹 Finished စာရင်းများ ရှင်းလင်းပြီးပါပြီ။"
-        status_text.update()
-
-    def clear_downloading_list(e):
-        for fname in list(download_tasks.keys()):
-            download_tasks[fname]['control'] = 'stopped'
-        download_tasks.clear()
-        update_ui()
-        status_text.value = "🧹 Downloading စာရင်းများ အားလုံးရှင်းလင်းပြီးပါပြီ။"
-        status_text.update()
-
-    def delete_downloading_task(e):
-        fname = e.control.data
-        if fname in download_tasks:
-            download_tasks[fname]['control'] = 'stopped'
-            del download_tasks[fname]
-            update_ui()
-
-    def delete_finished_task(e):
-        fname = e.control.data
-        if fname in finished_tasks:
-            del finished_tasks[fname]
-            update_ui()
-
-    tab_btn_1 = ft.ElevatedButton(text="📥 Downloading (0)", bgcolor="#333333", color="#4a9eff", style=ft.ButtonStyle(padding=8))
-    tab_btn_2 = ft.ElevatedButton(text="✅ Finished (0)", bgcolor="#222222", color="#2ecc71", style=ft.ButtonStyle(padding=8))
-
-    def update_ui():
-        try:
-            active_count = len(download_tasks)
-            finished_count = len(finished_tasks)
-            
-            tab_btn_1.text = f"📥 Downloading ({active_count})"
-            tab_btn_1.update()
-            
-            tab_btn_2.text = f"✅ Finished ({finished_count})"
-            tab_btn_2.update()
-
-            downloading_list.controls.clear()
-            for filename, info in download_tasks.items():
-                status_color = "#00ff88" if info['status'] == 'Downloading' else ("#e67e22" if info['status'] == 'Paused' else "#ff4444")
-                if info['status'] == 'Merging...':
-                    status_color = "#f1c40f"
-                
-                action_buttons = []
-                if info['status'] == 'Error' and 'error_msg' in info:
-                    action_buttons.append(
-                        ft.ElevatedButton(
-                            text="📋 Error", data=info['error_msg'], on_click=copy_task_error,
-                            bgcolor="#882222", color="#ffffff", style=ft.ButtonStyle(padding=3)
-                        )
-                    )
-
-                action_buttons.extend([
-                    ft.ElevatedButton(
-                        text="▶/⏸" if info['status'] != 'Paused' else "▶",
-                        data=filename, on_click=toggle_pause_resume, bgcolor="#333333", color="#ffffff", style=ft.ButtonStyle(padding=3)
-                    ),
-                    ft.ElevatedButton(
-                        text="⏹", data=filename, on_click=stop_download_task, bgcolor="#552222", color="#ffffff", style=ft.ButtonStyle(padding=3)
-                    ),
-                    ft.ElevatedButton(
-                        text="🗑️", data=filename, on_click=delete_downloading_task, bgcolor="#772222", color="#ffffff", style=ft.ButtonStyle(padding=3)
-                    )
-                ])
-
-                downloading_list.controls.append(
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Row([
-                                ft.Text(filename, size=11, color="#ffffff", weight=ft.FontWeight.BOLD, expand=True),
-                                ft.Text(info['speed'], size=10, color="#4a9eff"),
-                                ft.Text(f"{info['percent']}%", size=11, color=status_color, weight=ft.FontWeight.BOLD)
-                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                            ft.ProgressBar(value=info['percent']/100, color="#00ff88", bgcolor="#252525", height=6),
-                            ft.Row([
-                                ft.Text(info['status'], size=9, color=status_color),
-                                ft.Row(action_buttons, spacing=4)
-                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-                        ], spacing=3),
-                        bgcolor="#161616",
-                        padding=8,
-                        border_radius=8
-                    )
-                )
-
-            finished_list.controls.clear()
-            for filename, info in finished_tasks.items():
-                finished_list.controls.append(
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Row([
-                                ft.Text(filename, size=11, color="#2ecc71", weight=ft.FontWeight.BOLD, expand=True),
-                                ft.ElevatedButton(
-                                    text="🗑️ ဖျက်မည်", data=filename, on_click=delete_finished_task, bgcolor="#772222", color="#ffffff", style=ft.ButtonStyle(padding=3)
-                                )
-                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                            ft.Text(f"📂 သိမ်းဆည်းရာ: {info['path']}", size=9, color="#888888")
-                        ], spacing=3),
-                        bgcolor="#161616",
-                        padding=8,
-                        border_radius=8
-                    )
-                )
-            page.update()
-        except Exception:
-            pass
-
-    def toggle_pause_resume(e):
-        fname = e.control.data
-        if fname in download_tasks:
-            if download_tasks[fname]['status'] == 'Paused':
-                download_tasks[fname]['status'] = 'Downloading'
-                download_tasks[fname]['control'] = 'running'
-            else:
-                download_tasks[fname]['status'] = 'Paused'
-                download_tasks[fname]['control'] = 'paused'
-            update_ui()
-
-    def stop_download_task(e):
-        fname = e.control.data
-        if fname in download_tasks:
-            download_tasks[fname]['status'] = 'Stopped'
-            download_tasks[fname]['control'] = 'stopped'
-            update_ui()
-
-    def start_download(e):
-        raw_text = links_input.value.strip()
-        if not raw_text:
-            status_text.value = "❌ ကျေးဇူးပြု၍ Link ထည့်ပါ။"
-            status_text.color = "#ff4444"
-            page.update()
-            return
-
-        urls = [line.strip() for line in raw_text.split("\n") if line.strip()]
-        if not urls:
-            status_text.value = "❌ မှန်ကန်သော Link မရှိပါ။"
-            status_text.color = "#ff4444"
-            page.update()
-            return
-
-        # Storage စစ်ဆေးနေစဉ် Loading ပြပေးခြင်း
-        status_text.value = "🔍 Storage နှင့် ဖိုင်အရွယ်အစားများကို စစ်ဆေးနေပါသည်..."
-        status_text.color = "#f1c40f"
-        page.update()
-
-        # UI မခဲသွားစေရန် Background Thread ဖြင့် စစ်ဆေးခြင်း
-        threading.Thread(target=check_storage_and_enqueue, args=(urls,), daemon=True).start()
-
-    def check_storage_and_enqueue(urls):
-        total_required_bytes = 0
-        file_meta = []
-
-        for url in urls:
-            fname = url.split('/')[-1].split('?')[0]
-            fname = urllib.parse.unquote(fname) or "video.mp4"
-            size = 0
-            try:
-                res = requests.head(url, allow_redirects=True, timeout=5)
-                size = int(res.headers.get('content-length', 0))
-            except Exception:
-                pass
-            total_required_bytes += size
-            file_meta.append((fname, url, size))
-
-        _, free_bytes = get_storage_stats()
-
-        # လုံခြုံရေး Buffer အတွက် 200 MB ချန်ထားပြီး စစ်ဆေးခြင်း
-        safe_margin = 200 * 1024 * 1024 
-        if free_bytes > 0 and (total_required_bytes + safe_margin) > free_bytes:
-            # 🚨 Storage မလုံလောက်ပါက Alert Box ပြပြီး ရပ်တန့်ခြင်း
-            warning_desc.value = f"လိုအပ်ချက်: {format_size(total_required_bytes)} | လက်ကျန်: {format_size(free_bytes)}"
-            storage_alert_box.visible = True
-            status_text.value = "❌ လက်ကျန် Storage မလုံလောက်ပါသဖြင့် ဒေါင်းလုဒ် ရပ်တန့်ထားပါသည်။"
-            status_text.color = "#ff4444"
-            page.update()
-            return
-
-        # Storage လုံလောက်ပါက Alert Box ဖျောက်ပြီး ဒေါင်းလုဒ် စတင်ခြင်း
-        storage_alert_box.visible = False
-        status_text.color = "#4a9eff"
-        status_text.value = "🚀 4-Threads ဖြင့် အမြန်ဆွဲနေပါပြီ..."
-
-        for fname, url, size in file_meta:
-            download_tasks[fname] = {
-                'url': url, 'status': 'Waiting', 'percent': 0, 'speed': '0 KB/s', 
-                'control': 'running', 'last_ui_update': 0
-            }
-
-        update_ui()
-        threading.Thread(target=queue_download_worker, daemon=True).start()
-
-    def multi_thread_download(fname, url, file_path, total_size):
-        num_threads = 4  
-        part_size = total_size // num_threads
-        parts_downloaded = [0] * num_threads
-        start_time = time.time()
-
-        def download_part(part_index, start_byte, end_byte):
-            headers = {'Range': f'bytes={start_byte}-{end_byte}'}
-            part_file = f"{file_path}.part{part_index}"
-            try:
-                res = requests.get(url, headers=headers, stream=True, timeout=15)
-                with open(part_file, 'wb') as pf:
-                    for chunk in res.iter_content(chunk_size=131072): 
-                        while fname in download_tasks and download_tasks[fname]['control'] == 'paused':
-                            time.sleep(0.5)
-                        if fname not in download_tasks or download_tasks[fname]['control'] == 'stopped':
-                            return
-                        if chunk:
-                            pf.write(chunk)
-                            parts_downloaded[part_index] += len(chunk)
-                            
-                            total_dl = sum(parts_downloaded)
-                            elapsed = time.time() - start_time
-                            if elapsed > 0:
-                                speed_bps = total_dl / elapsed
-                                if speed_bps > 1024 * 1024:
-                                    speed_str = f"{speed_bps / (1024*1024):.1f} MB/s"
-                                else:
-                                    speed_str = f"{speed_bps / 1024:.1f} KB/s"
-                                download_tasks[fname]['speed'] = speed_str
-
-                            download_tasks[fname]['percent'] = int((total_dl / total_size) * 100)
-                            
-                            if time.time() - download_tasks[fname].get('last_ui_update', 0) > 0.5:
-                                download_tasks[fname]['last_ui_update'] = time.time()
-                                update_ui()
-            except Exception:
-                pass
-
-        threads = []
-        for i in range(num_threads):
-            start = i * part_size
-            end = total_size - 1 if i == num_threads - 1 else (start + part_size - 1)
-            t = threading.Thread(target=download_part, args=(i, start, end))
-            threads.append(t)
-            t.start()
-
-        for t in threads:
-            t.join()
-
-        if fname not in download_tasks or download_tasks[fname]['control'] == 'stopped':
-            for i in range(num_threads):
-                pf = f"{file_path}.part{i}"
-                if os.path.exists(pf):
-                    os.remove(pf)
-            return
-
-        if fname in download_tasks:
-            download_tasks[fname]['status'] = 'Merging...'
-            download_tasks[fname]['speed'] = 'Processing'
-            update_ui()
-            
-        with open(file_path, 'wb') as outfile:
-            for i in range(num_threads):
-                part_file = f"{file_path}.part{i}"
-                if os.path.exists(part_file):
-                    with open(part_file, 'rb') as infile:
-                        outfile.write(infile.read())
-                    os.remove(part_file)
-
-        if fname in download_tasks:
-            finished_tasks[fname] = {'path': str(file_path)}
-            del download_tasks[fname]
-            update_ui()
-            refresh_storage_display()
-
-    def queue_download_worker():
-        while True:
-            pending_files = [fname for fname, info in download_tasks.items() if info['status'] == 'Waiting']
-            if not pending_files:
-                break
-            
-            fname = pending_files[0]
-            url = download_tasks[fname]['url']
-            
-            if os.name == 'nt':
-                download_dir = Path.home() / "Downloads" / "DATA_PLUS"
-            else:
-                download_dir = Path("/storage/emulated/0/Download/DATA_PLUS")
-                
-            download_dir.mkdir(parents=True, exist_ok=True)
-            file_path = download_dir / fname
-
-            try:
-                download_tasks[fname]['status'] = 'Downloading'
-                update_ui()
-
-                head_res = requests.head(url, allow_redirects=True, timeout=10)
-                total_size = int(head_res.headers.get('content-length', 0))
-                
-                if total_size > 0:
-                    multi_thread_download(fname, url, str(file_path), total_size)
-                else:
-                    response = requests.get(url, stream=True, timeout=15)
-                    downloaded = 0
-                    start_time = time.time()
-                    with open(file_path, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=524288):
-                            while fname in download_tasks and download_tasks[fname]['control'] == 'paused':
-                                time.sleep(0.5)
-                            if fname not in download_tasks or download_tasks[fname]['control'] == 'stopped':
-                                if os.path.exists(file_path):
-                                    os.remove(file_path)
-                                return
-
-                            if chunk:
-                                f.write(chunk)
-                                downloaded += len(chunk)
-                                elapsed = time.time() - start_time
-                                if elapsed > 0:
-                                    speed_bps = downloaded / elapsed
-                                    if speed_bps > 1024 * 1024:
-                                        download_tasks[fname]['speed'] = f"{speed_bps / (1024*1024):.1f} MB/s"
-                                    else:
-                                        download_tasks[fname]['speed'] = f"{speed_bps / 1024:.1f} KB/s"
-                                
-                                if time.time() - download_tasks[fname].get('last_ui_update', 0) > 0.5:
-                                    download_tasks[fname]['last_ui_update'] = time.time()
-                                    update_ui()
-
-                    if fname in download_tasks:
-                        finished_tasks[fname] = {'path': str(file_path)}
-                        del download_tasks[fname]
-                        update_ui()
-                        refresh_storage_display()
-
-            except Exception as ex:
-                if fname in download_tasks:
-                    download_tasks[fname]['status'] = 'Error'
-                    download_tasks[fname]['speed'] = 'Failed'
-                    download_tasks[fname]['error_msg'] = f"{str(ex)}\n\n{traceback.format_exc()}"
-                    update_ui()
-
-        status_text.value = "🎉 ဒေါင်းလုဒ် အားလုံး ပြီးစီးသွားပါပြီ!"
-        refresh_storage_display()
-        page.update()
-
-    paste_btn = ft.ElevatedButton(text="📋 Paste", on_click=paste_from_clipboard, bgcolor="#333333", color="#ffffff")
-    clear_btn = ft.ElevatedButton(text="🗑️ Clear", on_click=clear_input, bgcolor="#552222", color="#ffffff")
-    download_btn = ft.ElevatedButton(text="📥 ဒေါင်းလုဒ် စတင်ရန်", on_click=start_download, bgcolor="#0275d8", color="#ffffff")
-    
-    clear_downloading_btn = ft.ElevatedButton(text="🧹 အားလုံးဖျက်မည်", on_click=clear_downloading_list, bgcolor="#442255", color="#ffffff", style=ft.ButtonStyle(padding=5))
-    clear_finished_btn = ft.ElevatedButton(text="🧹 အားလုံးဖျက်မည်", on_click=clear_finished_list, bgcolor="#442255", color="#ffffff", style=ft.ButtonStyle(padding=5))
-
-    content_area = ft.Container(
-        content=ft.Column([
-            ft.Row([clear_downloading_btn], alignment=ft.MainAxisAlignment.END),
-            downloading_list
-        ], spacing=4, expand=True), 
-        bgcolor="#101010", padding=6, expand=True, border_radius=10
-    )
-
-    def switch_to_downloading(e):
-        tab_btn_1.bgcolor = "#333333"
-        tab_btn_2.bgcolor = "#222222"
-        tab_btn_1.update()
-        tab_btn_2.update()
-        content_area.content = ft.Column([
-            ft.Row([clear_downloading_btn], alignment=ft.MainAxisAlignment.END),
-            downloading_list
-        ], spacing=4, expand=True)
-        content_area.update()
-
-    def switch_to_finished(e):
-        tab_btn_2.bgcolor = "#333333"
-        tab_btn_1.bgcolor = "#222222"
-        tab_btn_1.update()
-        tab_btn_2.update()
-        content_area.content = ft.Column([
-            ft.Row([clear_finished_btn], alignment=ft.MainAxisAlignment.END),
-            finished_list
-        ], spacing=4, expand=True)
-        content_area.update()
-
-    tab_btn_1.on_click = switch_to_downloading
-    tab_btn_2.on_click = switch_to_finished
-
-    # Main UI Layout
-    page.add(
-        ft.SafeArea(
-            content=ft.Container(
-                content=ft.Column([
-                    ft.Row([
-                        ft.Text("🎬 DATA PLUS Downloader", size=15, weight=ft.FontWeight.BOLD, color="#4a9eff")
-                    ], alignment=ft.MainAxisAlignment.CENTER),
-                    ft.Row([storage_display], alignment=ft.MainAxisAlignment.CENTER),
-                    storage_alert_box,
-                    status_text,
-                    links_input,
-                    ft.Row([paste_btn, clear_btn, download_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    ft.Divider(color="#222222", height=1),
-                    ft.Row([tab_btn_1, tab_btn_2], alignment=ft.MainAxisAlignment.SPACE_AROUND),
-                    content_area
-                ], spacing=6, expand=True),
-                bgcolor="#161616",
-                padding=10,
-                border_radius=16,
-                expand=True
-            ),
-            expand=True
-        )
-    )
-
-    # App ဖွင့်ချိန်တွင် Clipboard ထဲ Link ပါလာပါက Auto ထည့်ပေးခြင်း
+def set_clipboard_text(page: ft.Page, text: str):
     try:
-        clip = page.get_clipboard()
-        if clip and "http" in clip:
-            links_input.value = clip
-            status_text.value = "📋 Link များကို Clipboard မှ အလိုအလျောက် ထည့်ပေးထားပါသည်။"
-            page.update()
+        if hasattr(page, "set_clipboard"):
+            page.set_clipboard(text)
+        elif hasattr(page, "clipboard") and hasattr(page.clipboard, "set"):
+            page.clipboard.set(text)
     except Exception:
         pass
 
-ft.app(target=main)
+# 🚨 Error Dialog နှင့် Copy စနစ်
+def show_error_dialog(page: ft.Page, error_text: str):
+    def copy_error_to_clipboard(_):
+        set_clipboard_text(page, error_text)
+        page.snack_bar = ft.SnackBar(
+            content=ft.Text("✅ Error ကို Clipboard သို့ Copy ကူးပြီးပါပြီ!"),
+            bgcolor="#238636"
+        )
+        page.snack_bar.open = True
+        page.update()
+
+    err_dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Row(
+            controls=[
+                ft.Icon(ft.Icons.ERROR_OUTLINE, color="#F85149", size=24),
+                ft.Text("App Error", color="#F85149", weight=ft.FontWeight.BOLD, size=16),
+            ]
+        ),
+        content=ft.Container(
+            bgcolor="#0D1117",
+            border=ft.border.all(1, "#30363D"),
+            border_radius=8,
+            padding=10,
+            content=ft.Text(error_text, size=11, color="#FFA07A", selectable=True, font_family="monospace"),
+            max_height=200,
+        ),
+        actions=[
+            ft.ElevatedButton("📋 Copy Error", bgcolor="#0275D8", color="white", on_click=copy_error_to_clipboard),
+            ft.TextButton("Close", on_click=lambda _: setattr(err_dialog, "open", False) or page.update())
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+    page.dialog = err_dialog
+    err_dialog.open = True
+    page.update()
+
+
+class ADMDownloaderApp:
+    def __init__(self, page: ft.Page):
+        self.page = page
+        self.page.title = "DATA PLUS Downloader"
+        self.page.theme_mode = ft.ThemeMode.DARK
+        self.page.bgcolor = "#101317"
+        self.page.padding = 0
+
+        self.current_tab = "Finished"
+        self.downloads = []
+        self.is_downloading = False
+
+        try:
+            if not os.path.exists(DOWNLOAD_DIR):
+                os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+        except Exception:
+            pass
+
+        self.setup_ui()
+        self.refresh_list()  # ✅ စတင်ချိန်တွင် စာရင်းကို အလိုအလျောက် ပေါ်စေရန်
+        self.check_clipboard_and_start()
+
+    def show_error(self, err_msg: str):
+        show_error_dialog(self.page, err_msg)
+
+    def setup_ui(self):
+        # 🔝 ၁။ Top Bar
+        self.title_text = ft.Text(self.current_tab, size=18, weight=ft.FontWeight.BOLD, color="white")
+        self.top_actions_row = ft.Row(spacing=4, controls=[])
+
+        self.top_bar = ft.Container(
+            bgcolor="#1E232B",
+            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            content=ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.MENU, color="#C9D1D9", size=24),
+                            ft.Container(width=10),
+                            self.title_text,
+                        ]
+                    ),
+                    self.top_actions_row
+                ]
+            )
+        )
+
+        # 💾 ၂။ "ဖုန်း STORAGE လက်ကျန်" ထင်ရှားသော Card (စိမ်းပြာရောင် စာလုံးကြီးများ)
+        free_gb, total_gb, free_pct, used_ratio = get_phone_storage_info()
+        
+        self.storage_free_text = ft.Text(f"လက်ကျန်: {free_gb:.1f} GB", size=16, color="#00E676", weight=ft.FontWeight.BOLD)
+        self.storage_total_text = ft.Text(f"(စုစုပေါင်း: {total_gb:.1f} GB)", size=12, color="#8B949E", weight=ft.FontWeight.W_500)
+        self.storage_badge = ft.Text(f"{free_pct:.0f}% ကျန်ရှိ", size=11, color="white", weight=ft.FontWeight.BOLD)
+        
+        self.storage_progress = ft.ProgressBar(
+            value=used_ratio,
+            color="#00E676",
+            bgcolor="#263342",
+            height=8,
+            border_radius=4,
+        )
+
+        self.storage_card = ft.Container(
+            margin=ft.margin.symmetric(horizontal=10, vertical=6),
+            padding=ft.padding.symmetric(horizontal=14, vertical=10),
+            bgcolor="#16222F",
+            border=ft.border.all(1.5, "#2563EB"),
+            border_radius=10,
+            content=ft.Column(
+                spacing=6,
+                controls=[
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Row(
+                                spacing=6,
+                                controls=[
+                                    ft.Icon(ft.Icons.SD_STORAGE, size=18, color="#00E676"),
+                                    ft.Text("ဖုန်း STORAGE လက်ကျန်", size=13, color="#FFFFFF", weight=ft.FontWeight.BOLD),
+                                ]
+                            ),
+                            ft.Container(
+                                bgcolor="#1E40AF",
+                                border_radius=6,
+                                padding=ft.padding.symmetric(horizontal=8, vertical=2),
+                                content=self.storage_badge
+                            )
+                        ]
+                    ),
+                    # ✅ Safe Alignment (Error လုံးဝမတက်စေရန် CENTER သုံးထားသည်)
+                    ft.Row(
+                        spacing=8,
+                        alignment=ft.MainAxisAlignment.START,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        controls=[
+                            self.storage_free_text,
+                            self.storage_total_text,
+                        ]
+                    ),
+                    self.storage_progress,
+                ]
+            )
+        )
+
+        # 📋 ၃။ Download Items List
+        self.list_view = ft.ListView(
+            expand=True,
+            spacing=0,
+            padding=ft.padding.all(0)
+        )
+
+        # 🔻 ၄။ Bottom Navigation Bar
+        self.queue_icon = ft.Icon(ft.Icons.ACCESS_TIME, color="#8B949E", size=20)
+        self.queue_text = ft.Text("Queue", size=11, color="#8B949E")
+        
+        self.finished_icon = ft.Icon(ft.Icons.CHECK_CIRCLE, color="#00E676", size=20)
+        self.finished_text = ft.Text("Finished", size=11, color="#00E676")
+
+        self.bottom_bar = ft.Container(
+            bgcolor="#1E232B",
+            padding=ft.padding.symmetric(vertical=6, horizontal=15),
+            border=ft.border.only(top=ft.BorderSide(0.5, "#30363D")),
+            content=ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_AROUND,
+                controls=[
+                    ft.IconButton(
+                        icon=ft.Icons.POWER_SETTINGS_NEW,
+                        icon_color="#F85149",
+                        icon_size=22,
+                        tooltip="Exit App",
+                        on_click=lambda _: self.page.window.close() if hasattr(self.page, "window") else None
+                    ),
+                    ft.Container(
+                        content=ft.Icon(ft.Icons.ADD, color="white", size=24),
+                        bgcolor="#238636",
+                        border_radius=22,
+                        padding=ft.padding.all(7),
+                        ink=True,
+                        tooltip="Add Links",
+                        on_click=lambda _: self.show_add_links_dialog()
+                    ),
+                    ft.Container(
+                        content=ft.Column(
+                            alignment=ft.MainAxisAlignment.CENTER,
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=1,
+                            controls=[self.queue_icon, self.queue_text]
+                        ),
+                        ink=True,
+                        border_radius=8,
+                        padding=ft.padding.symmetric(horizontal=12, vertical=4),
+                        on_click=lambda _: self.switch_tab("Queue")
+                    ),
+                    ft.Container(
+                        content=ft.Column(
+                            alignment=ft.MainAxisAlignment.CENTER,
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=1,
+                            controls=[self.finished_icon, self.finished_text]
+                        ),
+                        ink=True,
+                        border_radius=8,
+                        padding=ft.padding.symmetric(horizontal=12, vertical=4),
+                        on_click=lambda _: self.switch_tab("Finished")
+                    ),
+                ]
+            )
+        )
+
+        self.page.add(
+            ft.Column(
+                expand=True,
+                spacing=0,
+                controls=[
+                    self.top_bar,
+                    self.storage_card,
+                    self.list_view,
+                    self.bottom_bar
+                ]
+            )
+        )
+
+    def update_top_actions(self):
+        tab = self.current_tab
+        current_items = [
+            it for it in self.downloads 
+            if (tab == "Finished" and it["status"] == "finished") or
+               (tab == "Queue" and it["status"] != "finished")
+        ]
+        selected_items = [it for it in current_items if it.get("selected", False)]
+        self.top_actions_row.controls.clear()
+
+        if current_items:
+            all_selected = len(selected_items) == len(current_items) and len(current_items) > 0
+            self.top_actions_row.controls.append(
+                ft.TextButton(
+                    "All" if not all_selected else "None",
+                    icon=ft.Icons.SELECT_ALL,
+                    style=ft.ButtonStyle(color="#58A6FF", padding=ft.padding.all(4)),
+                    on_click=lambda _: self.toggle_select_all(not all_selected)
+                )
+            )
+
+            if selected_items:
+                self.top_actions_row.controls.append(
+                    ft.ElevatedButton(
+                        f"Delete ({len(selected_items)})",
+                        bgcolor="#B91C1C",
+                        color="white",
+                        style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=8, vertical=4)),
+                        on_click=lambda _: self.delete_selected_items(selected_items)
+                    )
+                )
+            else:
+                self.top_actions_row.controls.append(
+                    ft.TextButton(
+                        "Remove All",
+                        icon=ft.Icons.DELETE_SWEEP,
+                        icon_color="#F85149",
+                        style=ft.ButtonStyle(color="#F85149", padding=ft.padding.all(4)),
+                        on_click=lambda _: self.confirm_remove_all()
+                    )
+                )
+        self.page.update()
+
+    def toggle_select_all(self, select_value):
+        tab = self.current_tab
+        for it in self.downloads:
+            if (tab == "Finished" and it["status"] == "finished") or (tab == "Queue" and it["status"] != "finished"):
+                it["selected"] = select_value
+        self.refresh_list()
+
+    def delete_selected_items(self, items):
+        for it in items:
+            self.clean_and_remove_item(it)
+        self.refresh_list()
+        self.update_storage_display()
+
+    def toggle_pause_resume(self, item):
+        if item["status"] == "downloading":
+            item["pause_requested"] = True
+            item["status"] = "paused"
+            item["speed"] = "Paused"
+            self.refresh_list()
+        elif item["status"] == "paused":
+            item["pause_requested"] = False
+            item["status"] = "queued"
+            item["speed"] = "Resuming..."
+            self.refresh_list()
+            if not self.is_downloading:
+                threading.Thread(target=self.start_download_worker, daemon=True).start()
+
+    def clean_and_remove_item(self, item):
+        item["cancel_requested"] = True
+        item["pause_requested"] = True
+        filepath = os.path.join(DOWNLOAD_DIR, item["name"])
+        tmp_file = f"{filepath}.tmp"
+        if os.path.exists(tmp_file):
+            try: os.remove(tmp_file)
+            except Exception: pass
+        if item in self.downloads:
+            self.downloads.remove(item)
+
+    def delete_single_item(self, item):
+        self.clean_and_remove_item(item)
+        self.refresh_list()
+        self.update_storage_display()
+
+    def confirm_remove_all(self):
+        tab = self.current_tab
+        items_to_remove = [
+            it for it in self.downloads 
+            if (tab == "Finished" and it["status"] == "finished") or
+               (tab == "Queue" and it["status"] != "finished")
+        ]
+        if not items_to_remove: return
+
+        def do_remove_all(_):
+            for it in items_to_remove:
+                self.clean_and_remove_item(it)
+            dialog.open = False
+            self.refresh_list()
+            self.update_storage_display()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Remove All ({tab})", color="#F85149", weight=ft.FontWeight.BOLD),
+            content=ft.Text(f"{tab} စာရင်းထဲရှိ ဖိုင်အားလုံးကို ဖျက်ပစ်ရန် သေချာပါသလား?"),
+            actions=[
+                ft.TextButton("မလုပ်တော့ပါ", on_click=lambda _: setattr(dialog, "open", False) or self.page.update()),
+                ft.ElevatedButton("ဖျက်မည်", bgcolor="#F85149", color="white", on_click=do_remove_all),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.dialog = dialog
+        dialog.open = True
+        self.page.update()
+
+    # 🎨 ADM Style Item Card (စာတန်းကို Progress Bar အပေါ် အလယ်တွင် ထားရှိထားသည်)
+    def build_adm_card(self, item):
+        is_done = item["status"] == "finished"
+        is_downloading = item["status"] == "downloading"
+        is_paused = item["status"] == "paused"
+        progress = item["progress"]
+
+        if is_done:
+            status_btn = ft.Icon(ft.Icons.CHECK_CIRCLE, color="#00E676", size=18)
+        elif is_downloading:
+            status_btn = ft.IconButton(
+                icon=ft.Icons.PAUSE_CIRCLE_FILLED,
+                icon_color="#E3B341",
+                icon_size=20,
+                tooltip="ခေတ္တရပ်မည်",
+                on_click=lambda _, it=item: self.toggle_pause_resume(it)
+            )
+        elif is_paused:
+            status_btn = ft.IconButton(
+                icon=ft.Icons.PLAY_CIRCLE_FILL,
+                icon_color="#58A6FF",
+                icon_size=20,
+                tooltip="ဆက်လက်ဒေါင်းမည်",
+                on_click=lambda _, it=item: self.toggle_pause_resume(it)
+            )
+        else:
+            status_btn = ft.Icon(ft.Icons.ACCESS_TIME, color="#8B949E", size=18)
+
+        center_speed_text = f"{item['speed']}  •  {item['eta']}"
+        center_color = "#00E676" if is_downloading else ("#E3B341" if is_paused else "#76B82A")
+        if is_done:
+            center_speed_text = "COMPLETE ✅"
+            center_color = "#00E676"
+
+        return ft.Container(
+            bgcolor="#13171D",
+            padding=ft.padding.symmetric(horizontal=10, vertical=7),
+            border=ft.border.only(bottom=ft.BorderSide(0.6, "#21262E")),
+            content=ft.Column(
+                spacing=4,
+                controls=[
+                    # ၁။ ဖိုင်အမည်နှင့် Checkbox အတန်း (Text Overflow မဖြစ်စေရန် Container ဖြင့် ထိန်းထားသည်)
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Row(
+                                expand=True,
+                                controls=[
+                                    ft.Checkbox(
+                                        value=item.get("selected", False),
+                                        fill_color="#2563EB",
+                                        check_color="white",
+                                        on_change=lambda e, it=item: self.on_item_select_changed(it, e.control.value)
+                                    ),
+                                    status_btn,
+                                    ft.Container(
+                                        expand=True,
+                                        content=ft.Text(
+                                            item["name"],
+                                            size=13,
+                                            color="white",
+                                            weight=ft.FontWeight.W_500,
+                                            overflow=ft.TextOverflow.ELLIPSIS,
+                                            max_lines=1
+                                        )
+                                    )
+                                ]
+                            ),
+                            ft.IconButton(
+                                icon=ft.Icons.DELETE_OUTLINE,
+                                icon_color="#8B949E",
+                                icon_size=18,
+                                tooltip="ဖျက်မည်",
+                                on_click=lambda _, it=item: self.delete_single_item(it)
+                            )
+                        ]
+                    ),
+
+                    # ၂။ 🌟 အပေါ်တန်း အလယ်ရှိ ထင်ရှားသော Speed စာတန်း
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Text(item['size'], size=11, color="#8B949E", weight=ft.FontWeight.W_500),
+                            ft.Text(center_speed_text, size=12, color=center_color, weight=ft.FontWeight.BOLD),
+                            ft.Text(item["date"], size=10.5, color="#8B949E")
+                        ]
+                    ),
+
+                    # ၃။ 🟩 သီးသန့် အစိမ်းရောင် Progress Bar
+                    ft.ProgressBar(
+                        value=progress,
+                        color="#E3B341" if is_paused else "#00E676",
+                        bgcolor="#21262E",
+                        height=6,
+                        border_radius=3,
+                    )
+                ]
+            )
+        )
+
+    def on_item_select_changed(self, item, value):
+        item["selected"] = value
+        self.update_top_actions()
+
+    def refresh_list(self):
+        self.list_view.controls.clear()
+        filtered = [
+            it for it in self.downloads 
+            if (self.current_tab == "Finished" and it["status"] == "finished") or
+               (self.current_tab == "Queue" and it["status"] != "finished")
+        ]
+
+        if not filtered:
+            self.list_view.controls.append(
+                ft.Container(
+                    alignment=ft.alignment.center,
+                    padding=ft.padding.only(top=80),
+                    content=ft.Text(f"No {self.current_tab} downloads", color="#484F58", size=14)
+                )
+            )
+        else:
+            for item in filtered:
+                self.list_view.controls.append(self.build_adm_card(item))
+
+        self.update_top_actions()
+        self.page.update()
+
+    def update_storage_display(self):
+        free_gb, total_gb, free_pct, used_ratio = get_phone_storage_info()
+        self.storage_free_text.value = f"လက်ကျန်: {free_gb:.1f} GB"
+        self.storage_total_text.value = f"(စုစုပေါင်း: {total_gb:.1f} GB)"
+        self.storage_badge.value = f"{free_pct:.0f}% ကျန်ရှိ"
+        self.storage_progress.value = used_ratio
+        self.page.update()
+
+    def switch_tab(self, tab_name):
+        self.current_tab = tab_name
+        self.title_text.value = tab_name
+
+        if tab_name == "Queue":
+            self.queue_icon.color = "#58A6FF"
+            self.queue_text.color = "#58A6FF"
+            self.finished_icon.color = "#8B949E"
+            self.finished_text.color = "#8B949E"
+        else:
+            self.queue_icon.color = "#8B949E"
+            self.queue_text.color = "#8B949E"
+            self.finished_icon.color = "#00E676"
+            self.finished_text.color = "#00E676"
+
+        self.refresh_list()
+
+    def show_add_links_dialog(self):
+        text_field = ft.TextField(
+            multiline=True,
+            min_lines=4,
+            max_lines=8,
+            hint_text="ဒီနေရာတွင် Link များကို ကူးထည့်ပါ (တစ်ကြောင်းလျှင် Link တစ်ခု)...",
+            border_color="#30363D",
+            focused_border_color="#238636",
+            bgcolor="#0D1117",
+            text_size=12,
+        )
+
+        def paste_from_clipboard(_):
+            clip = get_clipboard_text(self.page)
+            if clip:
+                text_field.value = clip
+                self.page.update()
+
+        def confirm_add(_):
+            raw_text = text_field.value or ""
+            urls = [u.strip() for u in raw_text.split("\n") if u.strip().startswith("http")]
+            dialog.open = False
+            self.page.update()
+            if urls:
+                self.add_urls_and_start(urls)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row(
+                controls=[
+                    ft.Icon(ft.Icons.ADD_LINK, color="#238636", size=22),
+                    ft.Text("Add Download Links", size=16, weight=ft.FontWeight.BOLD, color="white"),
+                ]
+            ),
+            content=ft.Container(
+                width=350,
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    controls=[
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            controls=[
+                                ft.Text("ဒေါင်းလုဒ် Link များ ထည့်သွင်းပါ:", size=12, color="#8B949E"),
+                                ft.TextButton("📋 Paste", icon=ft.Icons.CONTENT_PASTE, on_click=paste_from_clipboard)
+                            ]
+                        ),
+                        text_field,
+                    ]
+                )
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: setattr(dialog, "open", False) or self.page.update()),
+                ft.ElevatedButton("🚀 စတင်ဒေါင်းမည်", bgcolor="#238636", color="white", on_click=confirm_add)
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.dialog = dialog
+        dialog.open = True
+        self.page.update()
+
+    def add_urls_and_start(self, urls):
+        added = False
+        for url in urls:
+            if not any(d["url"] == url for d in self.downloads):
+                filename = unquote(url.split("/")[-1].split("?")[0]) or f"file_{int(time.time())}.mp4"
+                self.downloads.append({
+                    "url": url,
+                    "name": filename,
+                    "status": "queued",
+                    "progress": 0.0,
+                    "size": "0M",
+                    "speed": "0.0mb/s",
+                    "eta": "--:--",
+                    "date": datetime.now().strftime("%b %d, %Y %I:%M:%S %p"),
+                    "pause_requested": False,
+                    "cancel_requested": False,
+                    "selected": False
+                })
+                added = True
+        if added:
+            self.switch_tab("Queue")
+            if not self.is_downloading:
+                threading.Thread(target=self.start_download_worker, daemon=True).start()
+
+    def check_clipboard_and_start(self):
+        def _read_clip():
+            try:
+                time.sleep(0.3)
+                clip_text = get_clipboard_text(self.page)
+                if clip_text and "http" in clip_text:
+                    urls = [u.strip() for u in clip_text.split("\n") if u.strip().startswith("http")]
+                    if urls:
+                        self.add_urls_and_start(urls)
+            except Exception as e:
+                print("Clipboard check error:", e)
+
+        threading.Thread(target=_read_clip, daemon=True).start()
+
+    # 🚀 Multi-thread 4 with Direct-Seek (Zero Merge Time & High-Speed)
+    def download_file_direct_seek_4(self, item, filepath):
+        tmp_filepath = f"{filepath}.tmp"
+        
+        head_resp = http_session.head(item["url"], timeout=10, allow_redirects=True)
+        total_len = int(head_resp.headers.get("content-length", 0))
+
+        can_range = False
+        if total_len > 2 * 1024 * 1024:
+            try:
+                test_resp = http_session.get(item["url"], headers={"Range": "bytes=0-0"}, timeout=6)
+                if test_resp.status_code == 206:
+                    can_range = True
+            except Exception:
+                pass
+
+        CHUNK_SIZE = 1024 * 512  # 512KB Buffer
+
+        # ၁။ Range ထောက်ပံ့ပါက Multi-thread 4 Direct Seek ဖြင့် ဒေါင်းခြင်း
+        if can_range and total_len > 0:
+            if not os.path.exists(tmp_filepath) or os.path.getsize(tmp_filepath) != total_len:
+                try:
+                    with open(tmp_filepath, "wb") as f:
+                        f.truncate(total_len)
+                except Exception:
+                    with open(tmp_filepath, "wb") as f:
+                        f.seek(total_len - 1)
+                        f.write(b"\0")
+
+            NUM_THREADS = 4
+            part_size = total_len // NUM_THREADS
+            parts = []
+            for i in range(NUM_THREADS):
+                s = i * part_size
+                e = (s + part_size - 1) if i < NUM_THREADS - 1 else (total_len - 1)
+                parts.append((i, s, e))
+
+            bytes_downloaded = [0] * NUM_THREADS
+            progress_lock = threading.Lock()
+
+            def thread_worker(idx, p_start, p_end):
+                req_headers = {"Range": f"bytes={p_start}-{p_end}", "User-Agent": "Mozilla/5.0"}
+                with http_session.get(item["url"], headers=req_headers, stream=True, timeout=20) as resp:
+                    resp.raise_for_status()
+                    with open(tmp_filepath, "r+b") as out_f:
+                        out_f.seek(p_start)
+                        for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                            if item.get("pause_requested") or item.get("cancel_requested"):
+                                break
+                            if chunk:
+                                out_f.write(chunk)
+                                with progress_lock:
+                                    bytes_downloaded[idx] += len(chunk)
+
+            workers = [threading.Thread(target=thread_worker, args=p, daemon=True) for p in parts]
+            for w in workers: w.start()
+
+            start_time = time.time()
+            last_time = start_time
+            last_bytes = 0
+
+            while any(w.is_alive() for w in workers):
+                if item.get("pause_requested") or item.get("cancel_requested"):
+                    break
+                time.sleep(0.4)
+                now = time.time()
+                if now - last_time >= 0.8:
+                    with progress_lock:
+                        curr_bytes = sum(bytes_downloaded)
+                    speed_mb = (curr_bytes - last_bytes) / (now - last_time) / (1024 * 1024)
+                    last_time = now
+                    last_bytes = curr_bytes
+
+                    item["progress"] = min(curr_bytes / total_len, 0.99)
+                    item["size"] = f"{int(total_len / (1024 * 1024))}m"
+                    rem_sec = int((total_len - curr_bytes) / (speed_mb * 1024 * 1024)) if speed_mb > 0 else 0
+                    item["eta"] = f"{rem_sec // 60:02d}:{rem_sec % 60:02d}"
+                    item["speed"] = f"{speed_mb:.1f}mb/s"
+                    self.refresh_list()
+
+            for w in workers: w.join(timeout=0.3)
+
+            if item.get("cancel_requested"): return "cancelled"
+            if item.get("pause_requested"): return "paused"
+
+            with progress_lock:
+                total_dl = sum(bytes_downloaded)
+            if total_dl >= total_len:
+                if os.path.exists(filepath):
+                    try: os.remove(filepath)
+                    except Exception: pass
+                os.rename(tmp_filepath, filepath)
+                return "finished"
+            return "incomplete"
+
+        # ၂။ Single Stream Fallback
+        else:
+            with http_session.get(item["url"], stream=True, timeout=20) as resp:
+                if total_len == 0:
+                    total_len = int(resp.headers.get("content-length", 0))
+                downloaded = 0
+                start_time = time.time()
+                last_time = start_time
+                last_bytes = 0
+
+                with open(tmp_filepath, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                        if item.get("pause_requested") or item.get("cancel_requested"):
+                            break
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            now = time.time()
+                            if now - last_time >= 0.8:
+                                speed_mb = (downloaded - last_bytes) / (now - last_time) / (1024 * 1024)
+                                last_time = now
+                                last_bytes = downloaded
+                                if total_len > 0:
+                                    item["progress"] = min(downloaded / total_len, 0.99)
+                                    item["size"] = f"{int(total_len / (1024 * 1024))}m"
+                                    rem_sec = int((total_len - downloaded) / (speed_mb * 1024 * 1024)) if speed_mb > 0 else 0
+                                    item["eta"] = f"{rem_sec // 60:02d}:{rem_sec % 60:02d}"
+                                item["speed"] = f"{speed_mb:.1f}mb/s"
+                                self.refresh_list()
+
+            if item.get("cancel_requested"): return "cancelled"
+            if item.get("pause_requested"): return "paused"
+
+            if os.path.exists(tmp_filepath):
+                if os.path.exists(filepath):
+                    try: os.remove(filepath)
+                    except Exception: pass
+                os.rename(tmp_filepath, filepath)
+            return "finished"
+
+    # 🚀 Download Worker Loop
+    def start_download_worker(self):
+        try:
+            self.is_downloading = True
+            while True:
+                queued = [d for d in self.downloads if d["status"] == "queued"]
+                if not queued:
+                    break
+
+                item = queued[0]
+                item["status"] = "downloading"
+                item["pause_requested"] = False
+                item["cancel_requested"] = False
+                self.refresh_list()
+
+                filepath = os.path.join(DOWNLOAD_DIR, item["name"])
+                try:
+                    result = self.download_file_direct_seek_4(item, filepath)
+                    if result == "finished":
+                        item["status"] = "finished"
+                        item["progress"] = 1.0
+                        item["speed"] = "Done"
+                        item["eta"] = "00:00"
+                        item["date"] = datetime.now().strftime("%b %d, %Y %I:%M:%S %p")
+                        self.update_storage_display()
+                    elif result == "paused":
+                        item["status"] = "paused"
+                    elif result == "cancelled":
+                        continue
+                    else:
+                        item["status"] = "error"
+                except Exception as e:
+                    item["status"] = "error"
+                    print("Download item error:", e)
+
+                self.refresh_list()
+
+            self.is_downloading = False
+            if not any(d["status"] in ["queued", "downloading"] for d in self.downloads):
+                self.switch_tab("Finished")
+        except Exception:
+            self.is_downloading = False
+            err_msg = traceback.format_exc()
+            self.show_error(err_msg)
+
+
+def main(page: ft.Page):
+    try:
+        ADMDownloaderApp(page)
+    except Exception:
+        err_msg = traceback.format_exc()
+        print("Fatal error in main:", err_msg)
+        show_error_dialog(page, err_msg)
+
+if __name__ == "__main__":
+    ft.app(target=main)
