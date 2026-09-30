@@ -160,11 +160,11 @@ class ADMDownloaderApp:
             content=self.storage_badge
         )
         
-        # 🌟 အလယ်တည့်တည့်တွင် ထင်ရှားစွာ ပြသပေးမည့် ဒေါင်းလုဒ် Size & Warning Box
+        # 🌟 အလယ်တည့်တည့်ရှိ ဒေါင်းလုဒ် Size & Warning Box
         self.total_download_label = ft.Text(
             "ဒေါင်းလုဒ်အရွယ်အစား: 0 MB",
             size=14.5,
-            color="#38BDF8",  # တောက်ပသော Electric Cyan
+            color="#38BDF8",
             weight=ft.FontWeight.BOLD,
             text_align=ft.TextAlign.CENTER
         )
@@ -178,7 +178,6 @@ class ADMDownloaderApp:
             visible=False
         )
 
-        # အလယ်ခေါင် Highlight Card Box
         self.download_size_box = ft.Container(
             alignment=ft.alignment.center,
             bgcolor="#0E1726",
@@ -213,7 +212,6 @@ class ADMDownloaderApp:
             content=ft.Column(
                 spacing=6,
                 controls=[
-                    # Header
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
@@ -227,7 +225,6 @@ class ADMDownloaderApp:
                             self.badge_container
                         ]
                     ),
-                    # Storage Free / Total
                     ft.Row(
                         spacing=8,
                         alignment=ft.MainAxisAlignment.START,
@@ -237,7 +234,6 @@ class ADMDownloaderApp:
                             self.storage_total_text,
                         ]
                     ),
-                    # 🌟 အလယ်တည့်တည့်ရှိ ဒေါင်းလုဒ် Size ထင်ရှားသော Box
                     self.download_size_box,
                     self.storage_progress,
                 ]
@@ -251,12 +247,32 @@ class ADMDownloaderApp:
             padding=ft.padding.all(0)
         )
 
-        # 🔻 ၄။ Bottom Navigation Bar
+        # 🔻 ၄။ Bottom Navigation Bar (Queue နှင့် Finished ဘေးတွင် အရေအတွက်ပြ Badge များ ထည့်သွင်းထားသည်)
         self.queue_icon = ft.Icon(ft.Icons.ACCESS_TIME, color="#8B949E", size=20)
-        self.queue_text = ft.Text("Queue", size=11, color="#8B949E")
+        self.queue_text = ft.Text("Queue", size=11, color="#8B949E", weight=ft.FontWeight.W_500)
         
+        # 🔢 Queue Badge
+        self.queue_count_text = ft.Text("0", size=10, color="white", weight=ft.FontWeight.BOLD)
+        self.queue_badge = ft.Container(
+            content=self.queue_count_text,
+            bgcolor="#2A3441",
+            border_radius=10,
+            padding=ft.padding.symmetric(horizontal=6, vertical=1),
+            alignment=ft.alignment.center,
+        )
+
         self.finished_icon = ft.Icon(ft.Icons.CHECK_CIRCLE, color="#00E676", size=20)
-        self.finished_text = ft.Text("Finished", size=11, color="#00E676")
+        self.finished_text = ft.Text("Finished", size=11, color="#00E676", weight=ft.FontWeight.W_500)
+        
+        # 🔢 Finished Badge
+        self.finished_count_text = ft.Text("0", size=10, color="white", weight=ft.FontWeight.BOLD)
+        self.finished_badge = ft.Container(
+            content=self.finished_count_text,
+            bgcolor="#238636",
+            border_radius=10,
+            padding=ft.padding.symmetric(horizontal=6, vertical=1),
+            alignment=ft.alignment.center,
+        )
 
         self.bottom_bar = ft.Container(
             bgcolor="#1E232B",
@@ -281,35 +297,59 @@ class ADMDownloaderApp:
                         tooltip="Add Links",
                         on_click=lambda _: self.show_add_links_dialog()
                     ),
+                    # 🕒 Queue Tab (ဘေးတွင် အရေအတွက် Badge ပါရှိသည်)
                     ft.Container(
                         content=ft.Column(
                             alignment=ft.MainAxisAlignment.CENTER,
                             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                            spacing=1,
-                            controls=[self.queue_icon, self.queue_text]
+                            spacing=2,
+                            controls=[
+                                self.queue_icon,
+                                ft.Row(
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=4,
+                                    controls=[
+                                        self.queue_text,
+                                        self.queue_badge
+                                    ]
+                                )
+                            ]
                         ),
                         ink=True,
                         border_radius=8,
-                        padding=ft.padding.symmetric(horizontal=12, vertical=4),
+                        padding=ft.padding.symmetric(horizontal=10, vertical=4),
                         on_click=lambda _: self.switch_tab("Queue")
                     ),
+                    # ✅ Finished Tab (ဘေးတွင် အရေအတွက် Badge ပါရှိသည်)
                     ft.Container(
                         content=ft.Column(
                             alignment=ft.MainAxisAlignment.CENTER,
                             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                            spacing=1,
-                            controls=[self.finished_icon, self.finished_text]
+                            spacing=2,
+                            controls=[
+                                self.finished_icon,
+                                ft.Row(
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=4,
+                                    controls=[
+                                        self.finished_text,
+                                        self.finished_badge
+                                    ]
+                                )
+                            ]
                         ),
                         ink=True,
                         border_radius=8,
-                        padding=ft.padding.symmetric(horizontal=12, vertical=4),
+                        padding=ft.padding.symmetric(horizontal=10, vertical=4),
                         on_click=lambda _: self.switch_tab("Finished")
                     ),
                 ]
             )
         )
 
-        # 📱 မျက်နှာပြင်တစ်ခုလုံးကို ft.SafeArea ဖြင့် အပြည့်အဝ ကာကွယ်ထားပါသည်
+        # 📱 မျက်နှာပြင်တစ်ခုလုံးကို ft.SafeArea ဖြင့် ကာကွယ်ထားပါသည်
         self.page.add(
             ft.SafeArea(
                 expand=True,
@@ -326,6 +366,17 @@ class ADMDownloaderApp:
             )
         )
 
+    # 🔢 Queue နှင့် Finished အရေအတွက် Badge များကို အသစ်တင်ပေးခြင်း
+    def update_badge_counts(self):
+        q_count = len([it for it in self.downloads if it["status"] != "finished"])
+        f_count = len([it for it in self.downloads if it["status"] == "finished"])
+
+        self.queue_count_text.value = str(q_count)
+        self.finished_count_text.value = str(f_count)
+
+        self.queue_badge.bgcolor = "#2563EB" if q_count > 0 else "#2A3441"
+        self.finished_badge.bgcolor = "#238636" if f_count > 0 else "#2A3441"
+
     # 💾 Storage နှင့် ဒေါင်းလုဒ် Size တွက်ချက်စစ်ဆေးခြင်း
     def update_storage_display(self):
         free_bytes, free_gb, total_gb, free_pct, used_ratio = get_phone_storage_info()
@@ -334,13 +385,11 @@ class ADMDownloaderApp:
         self.storage_badge.value = f"{free_pct:.0f}% ကျန်ရှိ"
         self.storage_progress.value = used_ratio
 
-        # Queue ထဲရှိ ဒေါင်းလုဒ်ဆွဲရန်ကျန်သော ဖိုင်အားလုံး၏ စုစုပေါင်း Size
         queued_items = [it for it in self.downloads if it["status"] != "finished"]
         total_queued_bytes = sum(it.get("size_bytes", 0) for it in queued_items)
 
         self.total_download_label.value = f"ဒေါင်းလုဒ်အရွယ်အစား: {format_bytes_to_human(total_queued_bytes)}"
 
-        # 🚨 Storage မလောက်ပါက အလယ်ဘောက်စ်ပါ အနီရောင်သို့ ပြောင်းလဲခြင်း
         if total_queued_bytes > free_bytes and total_queued_bytes > 0:
             self.storage_warning_text.visible = True
             self.download_size_box.bgcolor = "#2A1215"
@@ -358,6 +407,7 @@ class ADMDownloaderApp:
             self.badge_container.bgcolor = "#1E40AF"
             self.storage_progress.color = "#00E676"
 
+        self.update_badge_counts()
         self.page.update()
 
     def update_top_actions(self):
@@ -596,6 +646,7 @@ class ADMDownloaderApp:
                 self.list_view.controls.append(self.build_adm_card(item))
 
         self.update_top_actions()
+        self.update_badge_counts()
         self.page.update()
 
     def switch_tab(self, tab_name):
