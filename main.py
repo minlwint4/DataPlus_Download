@@ -12,7 +12,7 @@ from urllib.parse import unquote
 # 📁 ဖိုင်သိမ်းဆည်းမည့် လမ်းကြောင်း
 DOWNLOAD_DIR = "/storage/emulated/0/Download/DataPlus"
 
-# ⚡ High-Speed Connection Pool (Local Network အတွက် အမြန်ဆုံး စနစ်)
+# ⚡ High-Speed Connection Pool
 http_session = requests.Session()
 adapter = HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=2)
 http_session.mount("http://", adapter)
@@ -28,10 +28,18 @@ def get_phone_storage_info():
             total_gb = total / (1024 ** 3)
             free_pct = (free / total * 100) if total > 0 else 0
             used_ratio = used / total if total > 0 else 0.0
-            return free_gb, total_gb, free_pct, used_ratio
+            return free, free_gb, total_gb, free_pct, used_ratio
         except Exception:
             continue
-    return 0.0, 0.0, 0.0, 0.0
+    return 0, 0.0, 0.0, 0.0, 0.0
+
+def format_bytes_to_human(bytes_val):
+    if bytes_val <= 0:
+        return "0 MB"
+    mb = bytes_val / (1024 * 1024)
+    if mb >= 1024:
+        return f"{mb / 1024:.2f} GB"
+    return f"{mb:.1f} MB"
 
 # 📋 Clipboard Helper Functions
 def get_clipboard_text(page: ft.Page) -> str:
@@ -110,7 +118,7 @@ class ADMDownloaderApp:
             pass
 
         self.setup_ui()
-        self.refresh_list()  # ✅ စတင်ချိန်တွင် စာရင်းကို အလိုအလျောက် ပေါ်စေရန်
+        self.refresh_list()
         self.check_clipboard_and_start()
 
     def show_error(self, err_msg: str):
@@ -139,13 +147,55 @@ class ADMDownloaderApp:
             )
         )
 
-        # 💾 ၂။ "ဖုန်း STORAGE လက်ကျန်" ထင်ရှားသော Card (စိမ်းပြာရောင် စာလုံးကြီးများ)
-        free_gb, total_gb, free_pct, used_ratio = get_phone_storage_info()
+        # 💾 ၂။ "ဖုန်း STORAGE လက်ကျန်" Card
+        free_bytes, free_gb, total_gb, free_pct, used_ratio = get_phone_storage_info()
         
-        self.storage_free_text = ft.Text(f"လက်ကျန်: {free_gb:.1f} GB", size=16, color="#00E676", weight=ft.FontWeight.BOLD)
+        self.storage_free_text = ft.Text(f"လက်ကျန်: {free_gb:.1f} GB", size=15, color="#00E676", weight=ft.FontWeight.BOLD)
         self.storage_total_text = ft.Text(f"(စုစုပေါင်း: {total_gb:.1f} GB)", size=12, color="#8B949E", weight=ft.FontWeight.W_500)
         self.storage_badge = ft.Text(f"{free_pct:.0f}% ကျန်ရှိ", size=11, color="white", weight=ft.FontWeight.BOLD)
+        self.badge_container = ft.Container(
+            bgcolor="#1E40AF",
+            border_radius=6,
+            padding=ft.padding.symmetric(horizontal=8, vertical=2),
+            content=self.storage_badge
+        )
         
+        # 🌟 အလယ်တည့်တည့်တွင် ထင်ရှားစွာ ပြသပေးမည့် ဒေါင်းလုဒ် Size & Warning Box
+        self.total_download_label = ft.Text(
+            "ဒေါင်းလုဒ်အရွယ်အစား: 0 MB",
+            size=14.5,
+            color="#38BDF8",  # တောက်ပသော Electric Cyan
+            weight=ft.FontWeight.BOLD,
+            text_align=ft.TextAlign.CENTER
+        )
+        
+        self.storage_warning_text = ft.Text(
+            "⚠️ လက်ကျန် storage မလုံလောက်ပါ!",
+            size=13.5,
+            color="#FF4D4D",
+            weight=ft.FontWeight.BOLD,
+            text_align=ft.TextAlign.CENTER,
+            visible=False
+        )
+
+        # အလယ်ခေါင် Highlight Card Box
+        self.download_size_box = ft.Container(
+            alignment=ft.alignment.center,
+            bgcolor="#0E1726",
+            border=ft.border.all(1, "#1E3A8A"),
+            border_radius=8,
+            padding=ft.padding.symmetric(horizontal=12, vertical=6),
+            margin=ft.margin.symmetric(vertical=3),
+            content=ft.Column(
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=3,
+                controls=[
+                    self.total_download_label,
+                    self.storage_warning_text
+                ]
+            )
+        )
+
         self.storage_progress = ft.ProgressBar(
             value=used_ratio,
             color="#00E676",
@@ -163,6 +213,7 @@ class ADMDownloaderApp:
             content=ft.Column(
                 spacing=6,
                 controls=[
+                    # Header
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
@@ -173,15 +224,10 @@ class ADMDownloaderApp:
                                     ft.Text("ဖုန်း STORAGE လက်ကျန်", size=13, color="#FFFFFF", weight=ft.FontWeight.BOLD),
                                 ]
                             ),
-                            ft.Container(
-                                bgcolor="#1E40AF",
-                                border_radius=6,
-                                padding=ft.padding.symmetric(horizontal=8, vertical=2),
-                                content=self.storage_badge
-                            )
+                            self.badge_container
                         ]
                     ),
-                    # ✅ Safe Alignment (Error လုံးဝမတက်စေရန် CENTER သုံးထားသည်)
+                    # Storage Free / Total
                     ft.Row(
                         spacing=8,
                         alignment=ft.MainAxisAlignment.START,
@@ -191,6 +237,8 @@ class ADMDownloaderApp:
                             self.storage_total_text,
                         ]
                     ),
+                    # 🌟 အလယ်တည့်တည့်ရှိ ဒေါင်းလုဒ် Size ထင်ရှားသော Box
+                    self.download_size_box,
                     self.storage_progress,
                 ]
             )
@@ -261,18 +309,56 @@ class ADMDownloaderApp:
             )
         )
 
+        # 📱 မျက်နှာပြင်တစ်ခုလုံးကို ft.SafeArea ဖြင့် အပြည့်အဝ ကာကွယ်ထားပါသည်
         self.page.add(
-            ft.Column(
+            ft.SafeArea(
                 expand=True,
-                spacing=0,
-                controls=[
-                    self.top_bar,
-                    self.storage_card,
-                    self.list_view,
-                    self.bottom_bar
-                ]
+                content=ft.Column(
+                    expand=True,
+                    spacing=0,
+                    controls=[
+                        self.top_bar,
+                        self.storage_card,
+                        self.list_view,
+                        self.bottom_bar
+                    ]
+                )
             )
         )
+
+    # 💾 Storage နှင့် ဒေါင်းလုဒ် Size တွက်ချက်စစ်ဆေးခြင်း
+    def update_storage_display(self):
+        free_bytes, free_gb, total_gb, free_pct, used_ratio = get_phone_storage_info()
+        self.storage_free_text.value = f"လက်ကျန်: {free_gb:.1f} GB"
+        self.storage_total_text.value = f"(စုစုပေါင်း: {total_gb:.1f} GB)"
+        self.storage_badge.value = f"{free_pct:.0f}% ကျန်ရှိ"
+        self.storage_progress.value = used_ratio
+
+        # Queue ထဲရှိ ဒေါင်းလုဒ်ဆွဲရန်ကျန်သော ဖိုင်အားလုံး၏ စုစုပေါင်း Size
+        queued_items = [it for it in self.downloads if it["status"] != "finished"]
+        total_queued_bytes = sum(it.get("size_bytes", 0) for it in queued_items)
+
+        self.total_download_label.value = f"ဒေါင်းလုဒ်အရွယ်အစား: {format_bytes_to_human(total_queued_bytes)}"
+
+        # 🚨 Storage မလောက်ပါက အလယ်ဘောက်စ်ပါ အနီရောင်သို့ ပြောင်းလဲခြင်း
+        if total_queued_bytes > free_bytes and total_queued_bytes > 0:
+            self.storage_warning_text.visible = True
+            self.download_size_box.bgcolor = "#2A1215"
+            self.download_size_box.border = ft.border.all(1.2, "#FF4D4D")
+            self.total_download_label.color = "#FFA1A1"
+            self.storage_card.border = ft.border.all(1.8, "#FF4444")
+            self.badge_container.bgcolor = "#B91C1C"
+            self.storage_progress.color = "#FF4444"
+        else:
+            self.storage_warning_text.visible = False
+            self.download_size_box.bgcolor = "#0E1726"
+            self.download_size_box.border = ft.border.all(1, "#1E3A8A")
+            self.total_download_label.color = "#38BDF8"
+            self.storage_card.border = ft.border.all(1.5, "#2563EB")
+            self.badge_container.bgcolor = "#1E40AF"
+            self.storage_progress.color = "#00E676"
+
+        self.page.update()
 
     def update_top_actions(self):
         tab = self.current_tab
@@ -390,7 +476,7 @@ class ADMDownloaderApp:
         dialog.open = True
         self.page.update()
 
-    # 🎨 ADM Style Item Card (စာတန်းကို Progress Bar အပေါ် အလယ်တွင် ထားရှိထားသည်)
+    # 🎨 ADM Style Item Card
     def build_adm_card(self, item):
         is_done = item["status"] == "finished"
         is_downloading = item["status"] == "downloading"
@@ -431,7 +517,6 @@ class ADMDownloaderApp:
             content=ft.Column(
                 spacing=4,
                 controls=[
-                    # ၁။ ဖိုင်အမည်နှင့် Checkbox အတန်း (Text Overflow မဖြစ်စေရန် Container ဖြင့် ထိန်းထားသည်)
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
@@ -467,8 +552,6 @@ class ADMDownloaderApp:
                             )
                         ]
                     ),
-
-                    # ၂။ 🌟 အပေါ်တန်း အလယ်ရှိ ထင်ရှားသော Speed စာတန်း
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
@@ -477,8 +560,6 @@ class ADMDownloaderApp:
                             ft.Text(item["date"], size=10.5, color="#8B949E")
                         ]
                     ),
-
-                    # ၃။ 🟩 သီးသန့် အစိမ်းရောင် Progress Bar
                     ft.ProgressBar(
                         value=progress,
                         color="#E3B341" if is_paused else "#00E676",
@@ -515,14 +596,6 @@ class ADMDownloaderApp:
                 self.list_view.controls.append(self.build_adm_card(item))
 
         self.update_top_actions()
-        self.page.update()
-
-    def update_storage_display(self):
-        free_gb, total_gb, free_pct, used_ratio = get_phone_storage_info()
-        self.storage_free_text.value = f"လက်ကျန်: {free_gb:.1f} GB"
-        self.storage_total_text.value = f"(စုစုပေါင်း: {total_gb:.1f} GB)"
-        self.storage_badge.value = f"{free_pct:.0f}% ကျန်ရှိ"
-        self.storage_progress.value = used_ratio
         self.page.update()
 
     def switch_tab(self, tab_name):
@@ -605,25 +678,45 @@ class ADMDownloaderApp:
 
     def add_urls_and_start(self, urls):
         added = False
+        new_items = []
         for url in urls:
             if not any(d["url"] == url for d in self.downloads):
                 filename = unquote(url.split("/")[-1].split("?")[0]) or f"file_{int(time.time())}.mp4"
-                self.downloads.append({
+                new_item = {
                     "url": url,
                     "name": filename,
                     "status": "queued",
                     "progress": 0.0,
                     "size": "0M",
+                    "size_bytes": 0,
                     "speed": "0.0mb/s",
                     "eta": "--:--",
                     "date": datetime.now().strftime("%b %d, %Y %I:%M:%S %p"),
                     "pause_requested": False,
                     "cancel_requested": False,
                     "selected": False
-                })
+                }
+                self.downloads.append(new_item)
+                new_items.append(new_item)
                 added = True
+
         if added:
             self.switch_tab("Queue")
+            def fetch_sizes():
+                for item in new_items:
+                    try:
+                        hr = http_session.head(item["url"], timeout=4, allow_redirects=True)
+                        cl = int(hr.headers.get("content-length", 0))
+                        item["size_bytes"] = cl
+                        if cl > 0:
+                            item["size"] = f"{int(cl / (1024 * 1024))}m"
+                    except Exception:
+                        pass
+                self.update_storage_display()
+                self.refresh_list()
+
+            threading.Thread(target=fetch_sizes, daemon=True).start()
+
             if not self.is_downloading:
                 threading.Thread(target=self.start_download_worker, daemon=True).start()
 
@@ -641,12 +734,13 @@ class ADMDownloaderApp:
 
         threading.Thread(target=_read_clip, daemon=True).start()
 
-    # 🚀 Multi-thread 4 with Direct-Seek (Zero Merge Time & High-Speed)
+    # 🚀 Multi-thread 4 with Direct-Seek (Zero Merge Time)
     def download_file_direct_seek_4(self, item, filepath):
         tmp_filepath = f"{filepath}.tmp"
         
         head_resp = http_session.head(item["url"], timeout=10, allow_redirects=True)
         total_len = int(head_resp.headers.get("content-length", 0))
+        item["size_bytes"] = total_len
 
         can_range = False
         if total_len > 2 * 1024 * 1024:
@@ -657,9 +751,8 @@ class ADMDownloaderApp:
             except Exception:
                 pass
 
-        CHUNK_SIZE = 1024 * 512  # 512KB Buffer
+        CHUNK_SIZE = 1024 * 512
 
-        # ၁။ Range ထောက်ပံ့ပါက Multi-thread 4 Direct Seek ဖြင့် ဒေါင်းခြင်း
         if can_range and total_len > 0:
             if not os.path.exists(tmp_filepath) or os.path.getsize(tmp_filepath) != total_len:
                 try:
@@ -736,11 +829,11 @@ class ADMDownloaderApp:
                 return "finished"
             return "incomplete"
 
-        # ၂။ Single Stream Fallback
         else:
             with http_session.get(item["url"], stream=True, timeout=20) as resp:
                 if total_len == 0:
                     total_len = int(resp.headers.get("content-length", 0))
+                    item["size_bytes"] = total_len
                 downloaded = 0
                 start_time = time.time()
                 last_time = start_time
